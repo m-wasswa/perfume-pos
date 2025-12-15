@@ -1,0 +1,206 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String
+  password      String
+  role          Role      @default(CASHIER)
+  storeId       String?
+  store         Store?    @relation(fields: [storeId], references: [id])
+  orders        Order[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  CASHIER
+}
+
+model Store {
+  id            String      @id @default(cuid())
+  name          String
+  address       String
+  phone         String
+  taxRate       Float       @default(0.08)
+  users         User[]
+  inventory     Inventory[]
+  orders        Order[]
+  batches       InventoryBatch[]
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+}
+
+model Product {
+  id            String      @id @default(cuid())
+  brand         String
+  name          String
+  description   String?
+  category      String
+  imageUrl      String?
+  olfactoryNotes String[]
+  variants      Variant[]
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  
+  @@index([brand, name])
+}
+
+model Variant {
+  id            String      @id @default(cuid())
+  productId     String
+  product       Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sku           String      @unique
+  barcode       String?     @unique
+  size          String
+  type          String
+  retailPrice   Float
+  isTester      Boolean     @default(false)
+  inventory     Inventory[]
+  orderItems    OrderItem[]
+  batches       InventoryBatch[]
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  
+  @@index([sku])
+  @@index([barcode])
+}
+
+model InventoryBatch {
+  id              String      @id @default(cuid())
+  variantId       String
+  variant         Variant     @relation(fields: [variantId], references: [id])
+  storeId         String
+  store           Store       @relation(fields: [storeId], references: [id])
+  wholesalePrice  Float
+  quantity        Int
+  remainingQty    Int
+  vendor          String
+  manufactureDate DateTime?
+  receivedDate    DateTime    @default(now())
+  orderItems      OrderItem[]
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  
+  @@index([variantId, storeId])
+}
+
+model Inventory {
+  id          String    @id @default(cuid())
+  variantId   String
+  variant     Variant   @relation(fields: [variantId], references: [id])
+  storeId     String
+  store       Store     @relation(fields: [storeId], references: [id])
+  quantity    Int       @default(0)
+  minStock    Int       @default(5)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  @@unique([variantId, storeId])
+  @@index([storeId])
+}
+
+model Customer {
+  id            String    @id @default(cuid())
+  name          String
+  email         String?   @unique
+  phone         String?   @unique
+  loyaltyPoints Int       @default(0)
+  orders        Order[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model Order {
+  id            String      @id @default(cuid())
+  orderNumber   String      @unique
+  storeId       String
+  store         Store       @relation(fields: [storeId], references: [id])
+  customerId    String?
+  customer      Customer?   @relation(fields: [customerId], references: [id])
+  cashierId     String
+  cashier       User        @relation(fields: [cashierId], references: [id])
+  items         OrderItem[]
+  subtotal      Float
+  tax           Float
+  discount      Float       @default(0)
+  total         Float
+  paymentMethod PaymentMethod
+  paymentStatus PaymentStatus @default(PENDING)
+  status        OrderStatus @default(COMPLETED)
+  notes         String?
+  isOnHold      Boolean     @default(false)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  
+  @@index([orderNumber])
+  @@index([storeId, createdAt])
+}
+
+model OrderItem {
+  id              String          @id @default(cuid())
+  orderId         String
+  order           Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variantId       String
+  variant         Variant         @relation(fields: [variantId], references: [id])
+  batchId         String
+  batch           InventoryBatch  @relation(fields: [batchId], references: [id])
+  quantity        Int
+  unitPrice       Float
+  unitCost        Float
+  totalPrice      Float
+  createdAt       DateTime        @default(now())
+  
+  @@index([orderId])
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  MOBILE
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum OrderStatus {
+  COMPLETED
+  ON_HOLD
+  CANCELLED
+  REFUNDED
+}
+
+model Expense {
+  id          String      @id @default(cuid())
+  category    ExpenseCategory
+  description String
+  amount      Float
+  date        DateTime
+  storeId     String?
+  notes       String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  
+  @@index([date, storeId])
+}
+
+enum ExpenseCategory {
+  RENT
+  SALARIES
+  UTILITIES
+  MARKETING
+  SUPPLIES
+  OTHER
+}
