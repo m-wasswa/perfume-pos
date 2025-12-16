@@ -13,6 +13,7 @@ export function PWAInstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [showPrompt, setShowPrompt] = useState(false)
   const [isIOS, setIsIOS] = useState(false)
+  const [isInstalled, setIsInstalled] = useState(false)
 
   useEffect(() => {
     // Check if it's iOS
@@ -20,17 +21,32 @@ export function PWAInstallPrompt() {
     const isIOSDevice = /iphone|ipad|ipod/.test(userAgent)
     setIsIOS(isIOSDevice)
 
+    // Check if app is already installed
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+    const isIOSStandalone = (navigator as any).standalone === true
+    const installed = isStandalone || isIOSStandalone
+    setIsInstalled(installed)
+
+    if (installed) {
+      console.log('PWA already installed')
+      return
+    }
+
     const handleBeforeInstallPrompt = (e: Event) => {
+      console.log('beforeinstallprompt event fired')
       e.preventDefault()
       setDeferredPrompt(e as BeforeInstallPromptEvent)
       setShowPrompt(true)
     }
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
+    console.log('PWA install prompt listener registered')
 
-    // Check if app is already installed
-    if (window.matchMedia('(display-mode: standalone)').matches) {
-      setShowPrompt(false)
+    // Log if service worker is registered
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then((registrations) => {
+        console.log('Service workers registered:', registrations.length)
+      })
     }
 
     return () => {
@@ -55,7 +71,8 @@ export function PWAInstallPrompt() {
     setDeferredPrompt(null)
   }
 
-  if (!showPrompt) return null
+  // Don't show if already installed or no prompt
+  if (!showPrompt || isInstalled || !deferredPrompt) return null
 
   return (
     <div className="fixed bottom-4 right-4 bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4 max-w-sm border border-gray-200 dark:border-gray-700 z-50">

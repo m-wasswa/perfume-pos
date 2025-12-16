@@ -18,14 +18,20 @@ export const metadata: Metadata = {
   title: "Perfume POS System",
   description: "Professional Point of Sale System for Perfume Retail",
   manifest: "/manifest.json",
+  metadataBase: new URL("http://localhost:3000"),
   appleWebApp: {
     capable: true,
-    statusBarStyle: "default",
+    statusBarStyle: "black-translucent",
     title: "Perfume POS",
   },
   formatDetection: {
     telephone: false,
   },
+  icons: [
+    { rel: "icon", url: "/icon-192.png", sizes: "192x192" },
+    { rel: "icon", url: "/icon-512.png", sizes: "512x512" },
+    { rel: "apple-touch-icon", url: "/icon-192.png", sizes: "192x192" },
+  ],
 };
 
 export const viewport: Viewport = {
@@ -44,13 +50,18 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <meta name="theme-color" content="#1f2937" />
+        <meta name="theme-color" content="#1f2937" media="(prefers-color-scheme: light)" />
+        <meta name="theme-color" content="#111827" media="(prefers-color-scheme: dark)" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
-        <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="apple-mobile-web-app-title" content="Perfume POS" />
+        <meta name="application-name" content="Perfume POS" />
+        <meta name="msapplication-TileColor" content="#1f2937" />
+        <meta name="msapplication-config" content="/browserconfig.xml" />
         <link rel="apple-touch-icon" href="/icon-192.png" />
         <link rel="manifest" href="/manifest.json" />
+        <link rel="icon" type="image/png" href="/icon-192.png" />
         <meta name="description" content="Professional Point of Sale System for Perfume Retail" />
       </head>
       <body
@@ -66,14 +77,22 @@ export default function RootLayout({
               window.addEventListener('load', () => {
                 navigator.serviceWorker.register('/sw.js').then(
                   (registration) => {
-                    console.log('ServiceWorker registration successful');
+                    console.log('ServiceWorker registration successful:', registration);
                   },
                   (err) => {
-                    console.log('ServiceWorker registration failed: ', err);
+                    console.error('ServiceWorker registration failed:', err);
                   }
                 );
               });
+            } else {
+              console.warn('Service Workers not supported');
             }
+            
+            // Log PWA installation checks
+            console.log('PWA Install Check:');
+            console.log('Manifest:', document.querySelector('link[rel="manifest"]')?.href);
+            console.log('Service Worker Ready:', 'serviceWorker' in navigator);
+            console.log('Display Mode:', window.matchMedia('(display-mode: standalone)').matches ? 'standalone' : 'browser');
           `}
         </script>
       </body>
