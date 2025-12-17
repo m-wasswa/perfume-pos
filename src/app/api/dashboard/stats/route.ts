@@ -36,31 +36,36 @@ export async function GET(req: NextRequest) {
         // Count total customers
         const totalCustomers = await prisma.customer.count()
 
-        // Get low stock items (where quantity < minStock)
-        const lowStockInventory = await prisma.inventory.findMany({
-            where: {
-                quantity: {
-                    lt: prisma.inventory.fields.minStock
-                }
-            },
-            include: {
-                variant: {
-                    include: {
-                        product: true
+        // Get low stock items using raw query (Prisma can't compare two fields in where)
+        const lowStockInventory = await prisma.$queryRaw`
+            SELECT i.* FROM "Inventory" i
+            WHERE i.quantity <= i."minStock"
+            LIMIT 10
+        ` as any[]
+
+        // Enrich with product details
+        let enrichedLowStock: any[] = []
+        for (const item of lowStockInventory) {
+            const inventory = await prisma.inventory.findUnique({
+                where: { id: item.id },
+                include: {
+                    variant: {
+                        include: {
+                            product: true
+                        }
                     }
                 }
-            },
-            take: 10
-        })
+            })
+            if (inventory) enrichedLowStock.push(inventory)
+        }
 
-        // Count low stock items
-        const lowStockCount = await prisma.inventory.count({
-            where: {
-                quantity: {
-                    lt: prisma.inventory.fields.minStock
-                }
-            }
-        })
+        // Count low stock items using raw query
+        const lowStockCountResult = await prisma.$queryRaw`
+            SELECT COUNT(*) as count FROM "Inventory"
+            WHERE quantity <= "minStock"
+        ` as { count: bigint }[]
+        
+        const lowStockCount = Number(lowStockCountResult[0]?.count || 0)
 
         // Get recent orders (last 5)
         const recentOrders = await prisma.order.findMany({
@@ -74,7 +79,7 @@ export async function GET(req: NextRequest) {
         })
 
         // Format low stock items
-        const lowStockItems = lowStockInventory.map(item => ({
+        const lowStockItems = enrichedLowStock.map(item => ({
             name: `${item.variant.product.brand} ${item.variant.product.name} - ${item.variant.size}`,
             stock: item.quantity,
             minStock: item.minStock

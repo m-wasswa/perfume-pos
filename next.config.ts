@@ -81,9 +81,7 @@ const pwaConfig = withPWA({
 });
 
 const nextConfig: NextConfig = {
-  turbopack: {
-    resolveAlias: {},
-  },
+  turbopack: {},
   experimental: {
     optimizePackageImports: ["@radix-ui/*", "lucide-react"],
   },

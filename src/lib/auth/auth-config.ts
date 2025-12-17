@@ -12,31 +12,36 @@ export const authOptions: NextAuthOptions = {
                 password: { label: "Password", type: "password" }
             },
             async authorize(credentials) {
-                if (!credentials?.email || !credentials?.password) {
-                    throw new Error("Invalid credentials")
-                }
+                try {
+                    if (!credentials?.email || !credentials?.password) {
+                        throw new Error("Invalid credentials")
+                    }
 
-                const user = await prisma.user.findUnique({
-                    where: { email: credentials.email },
-                    include: { store: true }
-                })
+                    const user = await prisma.user.findUnique({
+                        where: { email: credentials.email },
+                        include: { store: true }
+                    })
 
-                if (!user) {
-                    throw new Error("User not found")
-                }
+                    if (!user) {
+                        throw new Error("User not found")
+                    }
 
-                const isPasswordValid = await compare(credentials.password, user.password)
+                    const isPasswordValid = await compare(credentials.password, user.password)
 
-                if (!isPasswordValid) {
-                    throw new Error("Invalid password")
-                }
+                    if (!isPasswordValid) {
+                        throw new Error("Invalid password")
+                    }
 
-                return {
-                    id: user.id,
-                    email: user.email,
-                    name: user.name,
-                    role: user.role,
-                    storeId: user.storeId,
+                    return {
+                        id: user.id,
+                        email: user.email,
+                        name: user.name,
+                        role: user.role,
+                        storeId: user.storeId,
+                    }
+                } catch (error) {
+                    console.error('Auth authorize error:', error)
+                    throw error
                 }
             }
         })

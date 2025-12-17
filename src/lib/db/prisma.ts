@@ -7,7 +7,15 @@ const globalForPrisma = globalThis as unknown as {
     pool: Pool | undefined
 }
 
-const pool = globalForPrisma.pool ?? new Pool({ connectionString: process.env.DATABASE_URL })
+// Create pool with connection timeout and idle timeout settings
+const pool = globalForPrisma.pool ?? new Pool({
+    connectionString: process.env.DATABASE_URL,
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000,
+    statement_timeout: 30000,
+})
+
 const adapter = new PrismaPg(pool)
 
 export const prisma =
@@ -20,4 +28,12 @@ export const prisma =
 if (process.env.NODE_ENV !== 'production') {
     globalForPrisma.prisma = prisma
     globalForPrisma.pool = pool
+}
+
+// Handle graceful shutdown
+if (typeof process !== 'undefined' && process.on) {
+    process.on('SIGTERM', async () => {
+        await prisma.$disconnect()
+        process.exit(0)
+    })
 }
