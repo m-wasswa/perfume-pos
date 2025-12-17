@@ -39,6 +39,12 @@ export default function BarcodeScanPage() {
 
     const startCamera = async () => {
         try {
+            // Check if mediaDevices is supported (some browsers/iOS may not support)
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                toast.error('Camera not supported on this device. Please use manual entry.')
+                return
+            }
+
             const stream = await navigator.mediaDevices.getUserMedia({
                 video: {
                     facingMode: 'environment',
@@ -52,7 +58,15 @@ export default function BarcodeScanPage() {
                 setCameraActive(true)
             }
         } catch (error) {
-            toast.error('Unable to access camera. Please check permissions.')
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+            if (errorMessage.includes('Permission') || errorMessage.includes('NotAllowedError')) {
+                toast.error('Camera permission denied. Please enable camera in Settings.')
+            } else if (errorMessage.includes('NotFoundError') || errorMessage.includes('NotSupportedError')) {
+                toast.error('Camera not available on this device. Use manual entry instead.')
+            } else {
+                toast.error('Unable to access camera. Please check permissions.')
+            }
+            console.error('Camera error:', errorMessage)
         }
     }
 
@@ -67,19 +81,27 @@ export default function BarcodeScanPage() {
     const captureFrame = async () => {
         if (!videoRef.current) return
 
-        const canvas = document.createElement('canvas')
-        canvas.width = videoRef.current.videoWidth
-        canvas.height = videoRef.current.videoHeight
+        try {
+            const canvas = document.createElement('canvas')
+            canvas.width = videoRef.current.videoWidth
+            canvas.height = videoRef.current.videoHeight
 
-        const ctx = canvas.getContext('2d')
-        if (!ctx) return
+            const ctx = canvas.getContext('2d')
+            if (!ctx) {
+                toast.error('Canvas not supported on this device')
+                return
+            }
 
-        ctx.drawImage(videoRef.current, 0, 0)
-        const imageData = canvas.toDataURL('image/jpeg')
+            ctx.drawImage(videoRef.current, 0, 0)
+            const imageData = canvas.toDataURL('image/jpeg')
 
-        // In a real app, you would send this to a barcode detection API
-        // For now, we'll show a placeholder
-        toast.info('Frame captured - barcode detection coming soon')
+            // In a real app, you would send this to a barcode detection API
+            // For now, we'll show a placeholder
+            toast.info('Frame captured - barcode detection coming soon')
+        } catch (error) {
+            console.error('Frame capture error:', error)
+            toast.error('Failed to capture frame')
+        }
     }
 
     const addScannedProduct = async (sku: string) => {

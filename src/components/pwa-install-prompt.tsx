@@ -9,25 +9,31 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>
 }
 
+// Helper function to get initial values
+function getInitialValues() {
+  // These can't be called on server, so they're safe to call here
+  if (typeof window === 'undefined') {
+    return { isIOS: false, isInstalled: false }
+  }
+
+  const userAgent = window.navigator.userAgent.toLowerCase()
+  const isIOSDevice = /iphone|ipad|ipod/.test(userAgent)
+
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+  const isIOSStandalone = (navigator as { standalone?: boolean }).standalone === true
+  const installed = isStandalone || isIOSStandalone
+
+  return { isIOS: isIOSDevice, isInstalled: installed }
+}
+
 export function PWAInstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [showPrompt, setShowPrompt] = useState(false)
-  const [isIOS, setIsIOS] = useState(false)
-  const [isInstalled, setIsInstalled] = useState(false)
+  const [pwaState] = useState(getInitialValues())
 
   useEffect(() => {
-    // Check if it's iOS
-    const userAgent = window.navigator.userAgent.toLowerCase()
-    const isIOSDevice = /iphone|ipad|ipod/.test(userAgent)
-    setIsIOS(isIOSDevice)
-
-    // Check if app is already installed
-    const isStandalone = window.matchMedia('(display-mode: standalone)').matches
-    const isIOSStandalone = (navigator as any).standalone === true
-    const installed = isStandalone || isIOSStandalone
-    setIsInstalled(installed)
-
-    if (installed) {
+    // Early return if already installed
+    if (pwaState.isInstalled) {
       console.log('PWA already installed')
       return
     }
@@ -52,7 +58,7 @@ export function PWAInstallPrompt() {
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
     }
-  }, [])
+  }, [pwaState.isInstalled])
 
   const handleInstall = async () => {
     if (!deferredPrompt) return
@@ -72,7 +78,7 @@ export function PWAInstallPrompt() {
   }
 
   // Don't show if already installed or no prompt
-  if (!showPrompt || isInstalled || !deferredPrompt) return null
+  if (!showPrompt || pwaState.isInstalled || !deferredPrompt) return null
 
   return (
     <div className="fixed bottom-4 right-4 bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4 max-w-sm border border-gray-200 dark:border-gray-700 z-50">
@@ -82,7 +88,7 @@ export function PWAInstallPrompt() {
             Install Perfume POS
           </h3>
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            {isIOS
+            {pwaState.isIOS
               ? 'Tap Share, then "Add to Home Screen" to install'
               : 'Install the app on your device for offline access and quick launching'}
           </p>
@@ -95,7 +101,7 @@ export function PWAInstallPrompt() {
         </button>
       </div>
       
-      {!isIOS && (
+      {!pwaState.isIOS && (
         <Button
           onClick={handleInstall}
           className="w-full gap-2 bg-blue-600 hover:bg-blue-700 text-white"

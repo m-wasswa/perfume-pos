@@ -185,12 +185,28 @@ export default function BulkImportPage() {
         ].join('\n')
 
         const blob = new Blob([csv], { type: 'text/csv' })
-        const url = window.URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = 'product-import-template.csv'
-        a.click()
-        window.URL.revokeObjectURL(url)
+        
+        // iOS/Safari compatibility
+        if (navigator.userAgent.toLowerCase().includes('iphone') || navigator.userAgent.toLowerCase().includes('ipad')) {
+            // For iOS, try to open in new window instead of download
+            const reader = new FileReader()
+            reader.onload = (e) => {
+                const url = e.target?.result as string
+                const link = document.createElement('a')
+                link.href = url
+                link.download = 'product-import-template.csv'
+                link.click()
+            }
+            reader.readAsDataURL(blob)
+        } else {
+            // Standard download for other browsers
+            const url = window.URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = 'product-import-template.csv'
+            a.click()
+            window.URL.revokeObjectURL(url)
+        }
     }
 
     return (
