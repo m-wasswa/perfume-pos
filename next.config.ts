@@ -16,7 +16,7 @@ const pwaConfig = withPWA({
         cacheName: "google-fonts-webfonts",
         expiration: {
           maxEntries: 4,
-          maxAgeSeconds: 365 * 24 * 60 * 60, // 365 days
+          maxAgeSeconds: 365 * 24 * 60 * 60,
         },
       },
     },
@@ -27,7 +27,7 @@ const pwaConfig = withPWA({
         cacheName: "cdn-cache",
         expiration: {
           maxEntries: 60,
-          maxAgeSeconds: 30 * 24 * 60 * 60, // 30 days
+          maxAgeSeconds: 30 * 24 * 60 * 60,
         },
       },
     },
@@ -38,7 +38,18 @@ const pwaConfig = withPWA({
         cacheName: "next-image",
         expiration: {
           maxEntries: 64,
-          maxAgeSeconds: 24 * 60 * 60, // 24 hours
+          maxAgeSeconds: 24 * 60 * 60,
+        },
+      },
+    },
+    {
+      urlPattern: /\/uploads\/.*/i,
+      handler: "CacheFirst",
+      options: {
+        cacheName: "uploaded-images",
+        expiration: {
+          maxEntries: 100,
+          maxAgeSeconds: 30 * 24 * 60 * 60,
         },
       },
     },
@@ -50,7 +61,7 @@ const pwaConfig = withPWA({
         networkTimeoutSeconds: 15,
         expiration: {
           maxEntries: 150,
-          maxAgeSeconds: 5 * 24 * 60 * 60, // 5 days
+          maxAgeSeconds: 5 * 24 * 60 * 60,
         },
       },
     },
@@ -62,7 +73,7 @@ const pwaConfig = withPWA({
         networkTimeoutSeconds: 15,
         expiration: {
           maxEntries: 150,
-          maxAgeSeconds: 5 * 24 * 60 * 60, // 5 days
+          maxAgeSeconds: 5 * 24 * 60 * 60,
         },
       },
     },
@@ -70,13 +81,20 @@ const pwaConfig = withPWA({
 });
 
 const nextConfig: NextConfig = {
-  /* config options here */
   turbopack: {
     resolveAlias: {},
   },
   experimental: {
-    // Reduce memory usage
     optimizePackageImports: ["@radix-ui/*", "lucide-react"],
+  },
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'perfumepos.invetotrack.online',
+      },
+    ],
+    unoptimized: true,
   },
 };
 
