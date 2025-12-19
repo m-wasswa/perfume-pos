@@ -3,6 +3,7 @@
 import { SessionProvider } from 'next-auth/react'
 import { ThemeProvider } from 'next-themes'
 import { PWAInstallPrompt } from './pwa-install-prompt'
+import { DeploymentSyncProvider } from './deployment-sync-provider'
 
 export function Providers({ children }: { children: React.ReactNode }) {
     return (
@@ -12,6 +13,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
             refetchWhenOffline={false}
         >
             <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+                <DeploymentSyncProvider />
                 {children}
                 <PWAInstallPrompt />
             </ThemeProvider>

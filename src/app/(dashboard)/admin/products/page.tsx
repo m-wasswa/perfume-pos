@@ -6,8 +6,9 @@ import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Search, Edit, Package, Loader2, Upload, Scan, Trash2 } from 'lucide-react'
+import { Plus, Search, Edit, Package, Loader2, Upload, Scan, Trash2, AlertCircle, RotateCcw } from 'lucide-react'
 import { getProducts, searchProducts, deleteProduct } from '@/lib/actions/products'
+import { safeReadAction, safeWriteAction, isServerActionHashMismatch } from '@/lib/utils/server-action-handler'
 import { toast } from 'sonner'
 import { formatCurrency } from '@/lib/utils/formatters'
 
@@ -30,6 +31,8 @@ export default function ProductsPage() {
     const debouncedSearch = useDebounce(searchQuery, 500)
     const [products, setProducts] = useState<any[]>([])
     const [isLoading, setIsLoading] = useState(true)
+    const [error, setError] = useState<string | null>(null)
+    const [retryCount, setRetryCount] = useState(0)
     const [isDeleting, setIsDeleting] = useState<string | null>(null)
     const [deleteConfirmation, setDeleteConfirmation] = useState<{ productId: string; productName: string } | null>(null)
     const [pagination, setPagination] = useState({
@@ -39,20 +42,47 @@ export default function ProductsPage() {
         limit: 10
     })
 
-    const fetchProducts = async (page = 1) => {
+    const fetchProducts = async (page = 1, attempt = 0) => {
         setIsLoading(true)
+        setError(null)
         try {
-            const result = await getProducts(page)
+            const result = await safeReadAction(
+                () => getProducts(page),
+                'getProducts'
+            )
             if (result.success && result.products) {
                 setProducts(result.products)
                 setPagination(result.pagination!)
+                setRetryCount(0)
             } else {
-                toast.error('Failed to fetch products')
+                throw new Error(result.error || 'Failed to fetch products')
             }
         } catch (error) {
-            toast.error('An error occurred')
+            const errorMessage = error instanceof Error ? error.message : 'An error occurred'
+            console.error('Fetch products error:', errorMessage)
+
+            // Check if it's a hash mismatch - don't show error if we're doing hard reload
+            if (!isServerActionHashMismatch(error)) {
+                setError(errorMessage)
+
+                // Auto-retry logic for other transient failures
+                if (attempt < 2) {
+                    setRetryCount(attempt + 1)
+                    const delay = 1000 * Math.pow(2, attempt)
+                    setTimeout(() => {
+                        fetchProducts(page, attempt + 1)
+                    }, delay)
+                    return
+                }
+
+                toast.error(errorMessage)
+            }
+
+            setProducts([])
         } finally {
-            setIsLoading(false)
+            if (attempt === 0) {
+                setIsLoading(false)
+            }
         }
     }
 
@@ -63,15 +93,28 @@ export default function ProductsPage() {
         }
 
         setIsLoading(true)
+        setError(null)
         try {
-            const result = await searchProducts(query)
+            const result = await safeReadAction(
+                () => searchProducts(query),
+                'searchProducts'
+            )
             if (result.success && result.products) {
                 setProducts(result.products)
-                // Search doesn't return pagination, so we reset it or handle it differently
                 setPagination({ total: result.products.length, pages: 1, current: 1, limit: 100 })
+            } else {
+                throw new Error(result.error || 'Search failed')
             }
         } catch (error) {
-            toast.error('Search failed')
+            const errorMessage = error instanceof Error ? error.message : 'Search failed'
+            console.error('Search error:', errorMessage)
+
+            if (!isServerActionHashMismatch(error)) {
+                setError(errorMessage)
+                toast.error(errorMessage)
+            }
+
+            setProducts([])
         } finally {
             setIsLoading(false)
         }
@@ -95,10 +138,12 @@ export default function ProductsPage() {
         const { productId } = deleteConfirmation
         setIsDeleting(productId)
         try {
-            const result = await deleteProduct(productId)
+            const result = await safeWriteAction(
+                () => deleteProduct(productId),
+                'deleteProduct'
+            )
             if (result.success) {
                 toast.success('Product deleted successfully')
-                // Remove from list
                 setProducts(products.filter(p => p.id !== productId))
                 setDeleteConfirmation(null)
             } else {
@@ -106,8 +151,11 @@ export default function ProductsPage() {
                 setDeleteConfirmation(null)
             }
         } catch (error) {
-            toast.error('An error occurred while deleting the product')
-            setDeleteConfirmation(null)
+            const errorMessage = error instanceof Error ? error.message : 'An error occurred'
+            if (!isServerActionHashMismatch(error)) {
+                toast.error(errorMessage)
+                setDeleteConfirmation(null)
+            }
         } finally {
             setIsDeleting(null)
         }
@@ -115,6 +163,11 @@ export default function ProductsPage() {
 
     const cancelDelete = () => {
         setDeleteConfirmation(null)
+    }
+
+    const retryFetch = () => {
+        setRetryCount(0)
+        fetchProducts(pagination.current)
     }
 
     return (
@@ -163,15 +216,48 @@ export default function ProductsPage() {
                 </div>
             </Card>
 
+            {/* Error State with Retry */}
+            {error && (
+                <Card className="p-4 bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-900 rounded-lg">
+                    <div className="flex items-start gap-3">
+                        <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-red-800 dark:text-red-200">{error}</p>
+                            {retryCount > 0 && (
+                                <p className="text-xs text-red-700 dark:text-red-300 mt-1">Retry attempt {retryCount}/2...</p>
+                            )}
+                        </div>
+                        {!isLoading && (
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={retryFetch}
+                                className="flex-shrink-0 text-red-600 border-red-200 dark:border-red-900 dark:text-red-400"
+                            >
+                                <RotateCcw className="h-4 w-4 mr-1" />
+                                Retry
+                            </Button>
+                        )}
+                    </div>
+                </Card>
+            )}
+
             {/* Products List */}
             <div className="space-y-4">
                 {isLoading ? (
                     <div className="flex justify-center p-8">
-                        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+                        <div className="text-center space-y-3">
+                            <Loader2 className="h-8 w-8 animate-spin text-blue-600 mx-auto" />
+                            <p className="text-sm text-gray-500 dark:text-gray-400">
+                                {retryCount > 0 ? `Retrying... (Attempt ${retryCount})` : 'Loading products...'}
+                            </p>
+                        </div>
                     </div>
                 ) : products.length === 0 ? (
                     <Card className="p-8 text-center dark:bg-gray-800 dark:border-gray-700">
-                        <p className="text-gray-500 dark:text-gray-400">No products found</p>
+                        <p className="text-gray-500 dark:text-gray-400">
+                            {searchQuery ? 'No products found matching your search' : 'No products found'}
+                        </p>
                     </Card>
                 ) : (
                     products.map((product) => (

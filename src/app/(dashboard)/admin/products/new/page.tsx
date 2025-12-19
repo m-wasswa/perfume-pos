@@ -10,6 +10,7 @@ import Link from 'next/link'
 import { toast } from 'sonner'
 import Image from 'next/image'
 import { createProduct } from '@/lib/actions/products'
+import { safeWriteAction, isServerActionHashMismatch } from '@/lib/utils/server-action-handler'
 import { useBarcodeScanner } from '@/hooks/use-barcode-scanner'
 import BarcodeScannerModal from '@/components/barcode-scanner-modal'
 
@@ -121,7 +122,7 @@ export default function NewProductPage() {
             let imageUrl = ''
             if (images.length > 0) {
                 const formData = new FormData()
-                formData.append('file', images[0]) // Upload first image as main product image
+                formData.append('file', images[0])
 
                 const uploadResponse = await fetch('/api/admin/upload-image', {
                     method: 'POST',
@@ -138,25 +139,28 @@ export default function NewProductPage() {
                 }
             }
 
-            // Call createProduct server action
-            const result = await createProduct({
-                brand: product.brand,
-                name: product.name,
-                category: product.category,
-                description: product.description,
-                topNotes: product.topNotes,
-                middleNotes: product.middleNotes,
-                baseNotes: product.baseNotes,
-                imageUrl: imageUrl, // Add image URL
-                variants: variants.map(v => ({
-                    size: v.size,
-                    type: v.type,
-                    sku: v.sku,
-                    barcode: v.barcode,
-                    retailPrice: parseFloat(v.retailPrice),
-                    isTester: v.isTester,
-                })),
-            })
+            // Call createProduct server action with safe wrapper
+            const result = await safeWriteAction(
+                () => createProduct({
+                    brand: product.brand,
+                    name: product.name,
+                    category: product.category,
+                    description: product.description,
+                    topNotes: product.topNotes,
+                    middleNotes: product.middleNotes,
+                    baseNotes: product.baseNotes,
+                    imageUrl: imageUrl,
+                    variants: variants.map(v => ({
+                        size: v.size,
+                        type: v.type,
+                        sku: v.sku,
+                        barcode: v.barcode,
+                        retailPrice: parseFloat(v.retailPrice),
+                        isTester: v.isTester,
+                    })),
+                }),
+                'createProduct'
+            )
 
             if (result.success) {
                 toast.success('Product created successfully!')
@@ -166,7 +170,9 @@ export default function NewProductPage() {
             }
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Failed to create product'
-            toast.error(message)
+            if (!isServerActionHashMismatch(error)) {
+                toast.error(message)
+            }
         } finally {
             setIsSubmitting(false)
         }

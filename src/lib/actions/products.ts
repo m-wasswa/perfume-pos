@@ -4,6 +4,36 @@ import { prisma } from "@/lib/db/prisma"
 import { revalidatePath } from "next/cache"
 import { z } from "zod"
 
+/**
+ * Retry logic with exponential backoff for robust product fetching
+ * This ensures products are always fetched regardless of transient database issues
+ */
+async function retryFetch<T>(
+    fn: () => Promise<T>,
+    maxRetries = 3,
+    delay = 300
+): Promise<T> {
+    let lastError: Error | null = null
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+            return await fn()
+        } catch (error) {
+            lastError = error instanceof Error ? error : new Error(String(error))
+            console.log(`[Retry ${attempt + 1}/${maxRetries}] Error: ${lastError.message}`)
+
+            // Don't delay on last attempt
+            if (attempt < maxRetries - 1) {
+                // Exponential backoff: 300ms, 600ms, 1200ms
+                const waitTime = delay * Math.pow(2, attempt)
+                await new Promise(resolve => setTimeout(resolve, waitTime))
+            }
+        }
+    }
+
+    throw lastError || new Error('Max retries exceeded')
+}
+
 const variantSchema = z.object({
     size: z.string().min(1),
     type: z.string().min(1),
@@ -13,7 +43,7 @@ const variantSchema = z.object({
         return num
     }),
     sku: z.string().min(1),
-    barcode: z.string().optional().default(''),
+    barcode: z.union([z.string(), z.null()]).optional().transform((val) => val || ''),
     isTester: z.boolean().default(false),
 })
 
@@ -117,59 +147,103 @@ export async function createProduct(data: any) {
 
 export async function getProductBySKU(sku: string) {
     try {
-        const variant = await prisma.variant.findUnique({
-            where: { sku },
-            include: {
-                product: true,
-                inventory: true
-            }
-        })
+        if (!sku || sku.trim().length === 0) {
+            return { success: false, error: 'SKU is required' }
+        }
+
+        // Use retry logic for robust SKU lookup
+        const variant = await retryFetch(
+            async () => {
+                return prisma.variant.findUnique({
+                    where: { sku },
+                    include: {
+                        product: true,
+                        inventory: true
+                    }
+                })
+            },
+            3,
+            300
+        )
+
+        if (!variant) {
+            return { success: false, error: `Product with SKU "${sku}" not found` }
+        }
 
         return { success: true, variant }
     } catch (error) {
-        return { success: false, error: 'Product not found' }
+        console.error(`Error fetching product by SKU (${sku}):`, error)
+        return { success: false, error: 'Failed to fetch product. Please try again.' }
     }
 }
 
 export async function getProductByBarcode(barcode: string) {
     try {
-        const variant = await prisma.variant.findUnique({
-            where: { barcode },
-            include: {
-                product: true,
-                inventory: true
-            }
-        })
+        if (!barcode || barcode.trim().length === 0) {
+            return { success: false, error: 'Barcode is required' }
+        }
+
+        // Use retry logic for robust barcode lookup
+        const variant = await retryFetch(
+            async () => {
+                return prisma.variant.findUnique({
+                    where: { barcode },
+                    include: {
+                        product: true,
+                        inventory: true
+                    }
+                })
+            },
+            3,
+            300
+        )
+
+        if (!variant) {
+            return { success: false, error: `Product with barcode "${barcode}" not found` }
+        }
 
         return { success: true, variant }
     } catch (error) {
-        return { success: false, error: 'Product not found' }
+        console.error(`Error fetching product by barcode (${barcode}):`, error)
+        return { success: false, error: 'Failed to fetch product. Please try again.' }
     }
 }
 
 export async function searchProducts(query: string) {
     try {
-        const products = await prisma.product.findMany({
-            where: {
-                OR: [
-                    { brand: { contains: query, mode: 'insensitive' } },
-                    { name: { contains: query, mode: 'insensitive' } },
-                    { olfactoryNotes: { hasSome: [query] } }
-                ]
-            },
-            include: {
-                variants: {
-                    include: {
-                        inventory: true
-                    }
-                }
-            },
-            take: 20
-        })
+        if (!query || query.trim().length === 0) {
+            return { success: false, error: 'Search query is required', products: [] }
+        }
 
-        return { success: true, products }
+        // Use retry logic for robust product search
+        const products = await retryFetch(
+            async () => {
+                return prisma.product.findMany({
+                    where: {
+                        OR: [
+                            { brand: { contains: query, mode: 'insensitive' } },
+                            { name: { contains: query, mode: 'insensitive' } },
+                            { olfactoryNotes: { hasSome: [query] } }
+                        ]
+                    },
+                    include: {
+                        variants: {
+                            include: {
+                                inventory: true
+                            }
+                        }
+                    },
+                    take: 20
+                })
+            },
+            2,
+            300
+        )
+
+        return { success: true, products: products || [] }
     } catch (error) {
-        return { success: false, error: 'Search failed' }
+        console.error('Search failed after retries:', error)
+        return { success: false, error: 'Search failed. Please try again.', products: [] }
     }
 }
 
@@ -179,36 +253,49 @@ export async function getProducts(page = 1, limit = 10) {
         const fetchAll = limit === -1
         const skip = fetchAll ? 0 : (page - 1) * limit
 
-        const [products, total] = await Promise.all([
-            prisma.product.findMany({
-                skip,
-                take: fetchAll ? undefined : limit,
-                include: {
-                    variants: {
+        // Use retry logic with exponential backoff for robust product fetching
+        const [products, total] = await retryFetch(
+            async () => {
+                return Promise.all([
+                    prisma.product.findMany({
+                        skip,
+                        take: fetchAll ? undefined : limit,
                         include: {
-                            inventory: true
+                            variants: {
+                                include: {
+                                    inventory: true
+                                }
+                            }
+                        },
+                        orderBy: {
+                            createdAt: 'desc'
                         }
-                    }
-                },
-                orderBy: {
-                    createdAt: 'desc'
-                }
-            }),
-            prisma.product.count()
-        ])
+                    }),
+                    prisma.product.count()
+                ])
+            },
+            3,
+            300
+        )
 
         return {
             success: true,
-            products,
+            products: products || [],
             pagination: {
-                total,
-                pages: fetchAll ? 1 : Math.ceil(total / limit),
+                total: total || 0,
+                pages: fetchAll ? 1 : Math.ceil((total || 0) / limit),
                 current: page,
-                limit: fetchAll ? total : limit
+                limit: fetchAll ? (total || 0) : limit
             }
         }
     } catch (error) {
-        return { success: false, error: 'Failed to fetch products' }
+        console.error('Failed to fetch products after retries:', error)
+        return {
+            success: false,
+            error: 'Failed to fetch products. Please refresh the page.',
+            products: [],
+            pagination: { total: 0, pages: 0, current: 1, limit }
+        }
     }
 }
 

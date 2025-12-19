@@ -5,10 +5,13 @@ import { useRouter, useParams } from 'next/navigation'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ArrowLeft, Plus, Trash2, Upload, X, Loader2 } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, Upload, X, Loader2, Scan } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { updateProduct } from '@/lib/actions/products'
+import { safeWriteAction, isServerActionHashMismatch } from '@/lib/utils/server-action-handler'
+import { useBarcodeScanner } from '@/hooks/use-barcode-scanner'
+import BarcodeScannerModal from '@/components/barcode-scanner-modal'
 
 export default function EditProductPage() {
     const router = useRouter()
@@ -17,6 +20,9 @@ export default function EditProductPage() {
 
     const [isSubmitting, setIsSubmitting] = useState(false)
     const [isLoading, setIsLoading] = useState(true)
+    const [activeScanIndex, setActiveScanIndex] = useState<number | null>(null)
+    const [isScannerModalOpen, setIsScannerModalOpen] = useState(false)
+    const [scannerActiveVariantIndex, setScannerActiveVariantIndex] = useState<number | null>(null)
 
     const [product, setProduct] = useState({
         brand: '',
@@ -75,6 +81,20 @@ export default function EditProductPage() {
         loadProduct()
     }, [productId, router])
 
+    // Setup barcode scanner
+    useBarcodeScanner((scannedValue: string, type: 'barcode' | 'sku') => {
+        if (activeScanIndex !== null) {
+            const newVariants = [...variants]
+            if (type === 'barcode') {
+                newVariants[activeScanIndex].barcode = scannedValue
+            } else if (type === 'sku') {
+                newVariants[activeScanIndex].sku = scannedValue
+            }
+            setVariants(newVariants)
+            toast.success(`${type === 'barcode' ? 'Barcode' : 'SKU'} scanned: ${scannedValue}`)
+        }
+    })
+
     const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const files = Array.from(e.target.files || [])
         if (files.length === 0) return
@@ -103,7 +123,7 @@ export default function EditProductPage() {
     }
 
     const addVariant = () => {
-        setVariants([...variants, { size: '', type: 'EDP', retailPrice: '', wholesalePrice: '', sku: '', isTester: false }])
+        setVariants([...variants, { size: '', type: 'EDP', retailPrice: '', wholesalePrice: '', sku: '', barcode: '', isTester: false }])
     }
 
     const removeVariant = (index: number) => {
@@ -150,26 +170,30 @@ export default function EditProductPage() {
                 }
             }
 
-            // Call updateProduct server action
-            const result = await updateProduct(productId, {
-                brand: product.brand,
-                name: product.name,
-                category: product.category,
-                description: product.description,
-                imageUrl: imageUrl,
-                topNotes: product.topNotes,
-                middleNotes: product.middleNotes,
-                baseNotes: product.baseNotes,
-                variants: variants.map(v => ({
-                    id: v.id,
-                    size: v.size,
-                    type: v.type,
-                    sku: v.sku,
-                    retailPrice: parseFloat(v.retailPrice),
-                    wholesalePrice: parseFloat(v.wholesalePrice),
-                    isTester: v.isTester,
-                })),
-            })
+            // Call updateProduct server action with safe wrapper
+            const result = await safeWriteAction(
+                () => updateProduct(productId, {
+                    brand: product.brand,
+                    name: product.name,
+                    category: product.category,
+                    description: product.description,
+                    imageUrl: imageUrl,
+                    topNotes: product.topNotes,
+                    middleNotes: product.middleNotes,
+                    baseNotes: product.baseNotes,
+                    variants: variants.map(v => ({
+                        id: v.id,
+                        size: v.size,
+                        type: v.type,
+                        sku: v.sku,
+                        barcode: v.barcode,
+                        retailPrice: parseFloat(v.retailPrice),
+                        wholesalePrice: parseFloat(v.wholesalePrice),
+                        isTester: v.isTester,
+                    })),
+                }),
+                'updateProduct'
+            )
 
             if (result.success) {
                 toast.success('Product updated successfully!')
@@ -179,7 +203,9 @@ export default function EditProductPage() {
             }
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Failed to update product'
-            toast.error(message)
+            if (!isServerActionHashMismatch(error)) {
+                toast.error(message)
+            }
         } finally {
             setIsSubmitting(false)
         }
@@ -468,19 +494,45 @@ export default function EditProductPage() {
                                             disabled={variant.id}
                                         />
                                     </div>
+                                    <div>
+                                        <label className="block text-xs font-medium mb-1 dark:text-gray-300">Barcode</label>
+                                        <div className="flex gap-2">
+                                            <Input
+                                                value={variant.barcode || ''}
+                                                onChange={(e) => updateVariant(index, 'barcode', e.target.value)}
+                                                placeholder="e.g., 3614270053124"
+                                                className={`dark:bg-gray-700 dark:border-gray-600 dark:text-white ${activeScanIndex === index ? 'ring-2 ring-blue-500' : ''}`}
+                                            />
+                                            <Button
+                                                type="button"
+                                                variant="default"
+                                                size="sm"
+                                                onClick={() => {
+                                                    setScannerActiveVariantIndex(index)
+                                                    setIsScannerModalOpen(true)
+                                                }}
+                                                title="Open barcode scanner modal"
+                                                className="bg-blue-600 hover:bg-blue-700"
+                                            >
+                                                <Scan className="h-4 w-4" />
+                                            </Button>
+                                        </div>
+                                    </div>
                                 </div>
 
-                                <div className="mt-3">
-                                    <label className="block text-xs font-medium mb-1 dark:text-gray-300">Retail Price (UGX) *</label>
-                                    <Input
-                                        required
-                                        type="number"
-                                        step="0.01"
-                                        value={variant.retailPrice}
-                                        onChange={(e) => updateVariant(index, 'retailPrice', e.target.value)}
-                                        placeholder="0"
-                                        className="dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                                    />
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+                                    <div>
+                                        <label className="block text-xs font-medium mb-1 dark:text-gray-300">Retail Price (UGX) *</label>
+                                        <Input
+                                            required
+                                            type="number"
+                                            step="0.01"
+                                            value={variant.retailPrice}
+                                            onChange={(e) => updateVariant(index, 'retailPrice', e.target.value)}
+                                            placeholder="0"
+                                            className="dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                                        />
+                                    </div>
                                 </div>
 
                                 <div className="mt-3">
@@ -511,6 +563,22 @@ export default function EditProductPage() {
                     </Button>
                 </div>
             </form>
+
+            {/* Barcode Scanner Modal */}
+            <BarcodeScannerModal
+                isOpen={isScannerModalOpen}
+                onClose={() => setIsScannerModalOpen(false)}
+                onScan={(barcode) => {
+                    if (scannerActiveVariantIndex !== null) {
+                        const newVariants = [...variants]
+                        newVariants[scannerActiveVariantIndex].barcode = barcode
+                        setVariants(newVariants)
+                        setIsScannerModalOpen(false)
+                        toast.success(`Barcode scanned: ${barcode}`)
+                    }
+                }}
+                variantIndex={scannerActiveVariantIndex ?? 0}
+            />
         </div>
     )
 }
