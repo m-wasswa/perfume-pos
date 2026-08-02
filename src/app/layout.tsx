@@ -74,24 +74,31 @@ export default function RootLayout({
         <Toaster position="top-right" richColors />
         <script>
           {`
-            // next-pwa generates /sw.js via a Webpack plugin, but \`next dev\`
-            // runs on Turbopack, which never invokes it - so the file doesn't
-            // exist in dev and registering it there always 404s. Only the real
-            // production build (Webpack) actually produces the file.
-            const isProd = ${JSON.stringify(process.env.NODE_ENV === 'production')};
-            if (isProd && 'serviceWorker' in navigator) {
+            // next-pwa generates /sw.js via a Webpack plugin. This project
+            // builds with Turbopack (dev AND prod), which never invokes that
+            // plugin, so the file may not exist in either environment. Check
+            // it's actually there before registering, instead of assuming
+            // based on NODE_ENV, so this works correctly regardless of which
+            // bundler produced the current build.
+            if ('serviceWorker' in navigator) {
               window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js').then(
-                  (registration) => {
-                    console.log('ServiceWorker registration successful:', registration);
-                  },
-                  (err) => {
-                    console.error('ServiceWorker registration failed:', err);
+                fetch('/sw.js', { method: 'HEAD' }).then((res) => {
+                  if (!res.ok) {
+                    console.log('Service worker registration skipped: /sw.js is not present in this build');
+                    return;
                   }
-                );
+                  navigator.serviceWorker.register('/sw.js').then(
+                    (registration) => {
+                      console.log('ServiceWorker registration successful:', registration);
+                    },
+                    (err) => {
+                      console.error('ServiceWorker registration failed:', err);
+                    }
+                  );
+                }).catch(() => {
+                  console.log('Service worker registration skipped: could not check for /sw.js');
+                });
               });
-            } else if (!isProd) {
-              console.log('Service worker registration skipped in development (Turbopack does not generate sw.js)');
             } else {
               console.warn('Service Workers not supported');
             }
