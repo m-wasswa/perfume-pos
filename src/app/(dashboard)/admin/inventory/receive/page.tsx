@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -10,6 +10,7 @@ import Link from 'next/link'
 import { toast } from 'sonner'
 import { formatCurrency } from '@/lib/utils/formatters'
 import BarcodeScannerModal from '@/components/barcode-scanner-modal'
+import { useBarcodeScanner } from '@/hooks/use-barcode-scanner'
 
 interface ReceiveItem {
     variantId: string
@@ -46,6 +47,15 @@ export default function ReceiveStockPage() {
     const [receiveItems, setReceiveItems] = useState<ReceiveItem[]>([])
     const [isSubmitting, setIsSubmitting] = useState(false)
     const [isScannerOpen, setIsScannerOpen] = useState(false)
+    const [lastVendor, setLastVendor] = useState('')
+    const quantityInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
+
+    useEffect(() => {
+        const saved = window.localStorage.getItem('perfume-pos:last-vendor')
+        if (saved) setLastVendor(saved)
+    }, [])
+
+    const today = new Date().toISOString().split('T')[0]
 
     const searchProducts = async (query: string) => {
         if (!query.trim()) {
@@ -71,25 +81,41 @@ export default function ReceiveStockPage() {
         }
     }
 
-    const handleBarcodeScanned = async (barcode: string) => {
-        // Search for product by barcode
+    const handleBarcodeScanned = async (code: string) => {
+        // Try barcode first, then fall back to SKU - the same order the POS
+        // terminal uses, since not every variant has a barcode assigned yet.
         setIsSearching(true)
         try {
-            const response = await fetch(`/api/products/by-barcode/${encodeURIComponent(barcode)}`)
-            const data = await response.json()
+            let response = await fetch(`/api/products/by-barcode/${encodeURIComponent(code)}`)
+            let data = await response.json()
+
+            if (!data.success || !data.variant) {
+                response = await fetch(`/api/products/by-sku/${encodeURIComponent(code)}`)
+                data = await response.json()
+            }
 
             if (data.success && data.variant) {
                 addItem(data.variant)
                 toast.success(`Added: ${data.variant.product.brand} ${data.variant.product.name}`)
             } else {
-                toast.error('Product with this barcode not found')
+                toast.error('Product not found for this barcode/SKU')
             }
         } catch (error) {
-            toast.error('Failed to find product by barcode')
+            toast.error('Failed to find product')
         } finally {
             setIsSearching(false)
         }
     }
+
+    // Same global scanner used on the POS terminal and Bulk Stock Import - no
+    // need to click into a field first. Only act on values shaped like a real
+    // barcode (12-14 digits): the search box above doubles as free-text search,
+    // and typing a brand/name query then pausing to read the dropdown would
+    // otherwise get misread as a completed scan.
+    useBarcodeScanner((value, type) => {
+        if (type !== 'barcode') return
+        handleBarcodeScanned(value)
+    })
 
     const addItem = (variant: ProductVariant) => {
         const exists = receiveItems.find(item => item.variantId === variant.id)
@@ -99,11 +125,13 @@ export default function ReceiveStockPage() {
             return
         }
 
+        const newIndex = receiveItems.length
         setReceiveItems([...receiveItems, {
             variantId: variant.id,
             quantity: 1,
             wholesalePrice: 0,
-            vendor: '',
+            vendor: lastVendor,
+            manufactureDate: today,
             productDetails: {
                 brand: variant.product.brand,
                 name: variant.product.name,
@@ -115,12 +143,22 @@ export default function ReceiveStockPage() {
 
         setSearchQuery('')
         setProducts([])
+
+        setTimeout(() => {
+            const input = quantityInputRefs.current[newIndex]
+            input?.focus()
+            input?.select()
+        }, 0)
     }
 
     const updateItem = (index: number, updates: Partial<ReceiveItem>) => {
         setReceiveItems(receiveItems.map((item, i) =>
             i === index ? { ...item, ...updates } : item
         ))
+        if (updates.vendor !== undefined && updates.vendor.trim()) {
+            setLastVendor(updates.vendor)
+            window.localStorage.setItem('perfume-pos:last-vendor', updates.vendor)
+        }
     }
 
     const removeItem = (index: number) => {
@@ -134,7 +172,7 @@ export default function ReceiveStockPage() {
         }
 
         const invalidItems = receiveItems.filter(item =>
-            item.quantity <= 0 || item.wholesalePrice <= 0 || !item.vendor.trim()
+            item.quantity <= 0
         )
 
         if (invalidItems.length > 0) {
@@ -193,6 +231,21 @@ export default function ReceiveStockPage() {
                         <h2 className="text-xl font-semibold mb-4 dark:text-white">Add Products</h2>
 
                         <div className="space-y-4">
+                            <div className="flex items-center justify-between gap-2 bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-900 rounded-lg px-3 py-2">
+                                <span className="text-xs md:text-sm text-purple-700 dark:text-purple-300 font-medium">
+                                    Scanner ready - just scan a barcode to add it
+                                </span>
+                                <Button
+                                    onClick={() => setIsScannerOpen(true)}
+                                    size="sm"
+                                    variant="outline"
+                                    className="gap-1.5 shrink-0 border-purple-300 text-purple-700 dark:text-purple-300 dark:border-purple-700"
+                                >
+                                    <Scan className="h-3.5 w-3.5" />
+                                    <span>Use Camera</span>
+                                </Button>
+                            </div>
+
                             <div>
                                 <label className="block text-sm font-medium mb-2 dark:text-gray-200">Search Product</label>
                                 <div className="flex gap-2">
@@ -209,15 +262,6 @@ export default function ReceiveStockPage() {
                                             className="pl-10 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                                         />
                                     </div>
-                                    <Button
-                                        onClick={() => setIsScannerOpen(true)}
-                                        variant="outline"
-                                        size="icon"
-                                        className="dark:bg-gray-700 dark:border-gray-600"
-                                        title="Scan barcode"
-                                    >
-                                        <Scan className="h-4 w-4" />
-                                    </Button>
                                 </div>
 
                                 {products.length > 0 && (
@@ -294,17 +338,38 @@ export default function ReceiveStockPage() {
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                                                 <div>
                                                     <label className="block text-sm font-medium mb-2 dark:text-gray-200">Quantity *</label>
-                                                    <Input
-                                                        type="number"
-                                                        min="1"
-                                                        value={item.quantity}
-                                                        onChange={(e) => updateItem(index, { quantity: parseInt(e.target.value) || 0 })}
-                                                        placeholder="0"
-                                                        className="dark:bg-gray-600 dark:border-gray-500 dark:text-white"
-                                                    />
+                                                    <div className="flex items-center gap-2">
+                                                        <Button
+                                                            type="button"
+                                                            variant="outline"
+                                                            size="icon"
+                                                            className="shrink-0 dark:bg-gray-600 dark:border-gray-500"
+                                                            onClick={() => updateItem(index, { quantity: Math.max(0, item.quantity - 1) })}
+                                                        >
+                                                            −
+                                                        </Button>
+                                                        <Input
+                                                            ref={(el) => { quantityInputRefs.current[index] = el }}
+                                                            type="number"
+                                                            min="1"
+                                                            value={item.quantity}
+                                                            onChange={(e) => updateItem(index, { quantity: parseInt(e.target.value) || 0 })}
+                                                            placeholder="0"
+                                                            className="text-center dark:bg-gray-600 dark:border-gray-500 dark:text-white"
+                                                        />
+                                                        <Button
+                                                            type="button"
+                                                            variant="outline"
+                                                            size="icon"
+                                                            className="shrink-0 dark:bg-gray-600 dark:border-gray-500"
+                                                            onClick={() => updateItem(index, { quantity: item.quantity + 1 })}
+                                                        >
+                                                            +
+                                                        </Button>
+                                                    </div>
                                                 </div>
                                                 <div>
-                                                    <label className="block text-sm font-medium mb-2 dark:text-gray-200">Wholesale Price *</label>
+                                                    <label className="block text-sm font-medium mb-2 dark:text-gray-200">Wholesale Price</label>
                                                     <Input
                                                         type="number"
                                                         step="0.01"
@@ -315,7 +380,7 @@ export default function ReceiveStockPage() {
                                                     />
                                                 </div>
                                                 <div>
-                                                    <label className="block text-sm font-medium mb-2 dark:text-gray-200">Vendor *</label>
+                                                    <label className="block text-sm font-medium mb-2 dark:text-gray-200">Vendor</label>
                                                     <Input
                                                         value={item.vendor}
                                                         onChange={(e) => updateItem(index, { vendor: e.target.value })}

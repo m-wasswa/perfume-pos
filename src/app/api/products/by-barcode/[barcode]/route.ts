@@ -21,7 +21,12 @@ export async function GET(
                         olfactoryNotes: true,
                     }
                 },
-                inventory: true
+                inventory: true,
+                batches: {
+                    orderBy: { receivedDate: 'desc' },
+                    take: 1,
+                    select: { wholesalePrice: true }
+                }
             }
         })
 
@@ -35,7 +40,8 @@ export async function GET(
         return NextResponse.json({
             success: true,
             variant,
-            product: variant.product
+            product: variant.product,
+            lastWholesalePrice: variant.batches[0]?.wholesalePrice ?? null
         })
     } catch (error) {
         console.error('Error fetching product by barcode:', error)

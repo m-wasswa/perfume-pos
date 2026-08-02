@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { useBarcodeScanner } from '@/hooks/use-barcode-scanner'
@@ -9,7 +9,6 @@ import { getProductBySKU, getProducts } from '@/lib/actions/products'
 import { createOrder } from '@/lib/actions/orders'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Card } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Badge } from '@/components/ui/badge'
 import BarcodeScannerModal from '@/components/barcode-scanner-modal'
@@ -36,12 +35,13 @@ export default function POSTerminal() {
     const [taxRate, setTaxRate] = useState(0.18) // Default 18%, will be updated from settings
     const [searchQuery, setSearchQuery] = useState('')
     const [allProducts, setAllProducts] = useState<any[]>([])
-    const [filteredProducts, setFilteredProducts] = useState<any[]>([])
+    const [selectedCategory, setSelectedCategory] = useState('All')
     const [loading, setLoading] = useState(true)
     const [lastScannedBarcode, setLastScannedBarcode] = useState('')
     const [barcodeInput, setBarcodeInput] = useState('')
     const [lastAddedProduct, setLastAddedProduct] = useState<any>(null)
     const [isScannerOpen, setIsScannerOpen] = useState(false)
+    const [pendingPayment, setPendingPayment] = useState<'CASH' | 'CARD' | 'MOBILE' | null>(null)
     const cart = useCartStore()
 
     // Load settings and products on mount
@@ -70,25 +70,37 @@ export default function POSTerminal() {
         const result = await getProducts(1, -1)
         if (result.success && result.products) {
             setAllProducts(result.products)
-            setFilteredProducts(result.products)
         }
         setLoading(false)
     }
 
-    // Filter products based on search
-    useEffect(() => {
-        if (searchQuery.trim() === '') {
-            setFilteredProducts(allProducts)
-        } else {
-            const query = searchQuery.toLowerCase()
-            const filtered = allProducts.filter(product =>
+    // One catalog item per variant (not per product) so a product with many
+    // sizes never inflates a single card's height and breaks the grid.
+    const catalogItems = useMemo(() => {
+        return allProducts.flatMap((product) =>
+            (product.variants || []).map((variant: any) => ({ product, variant }))
+        )
+    }, [allProducts])
+
+    const categories = useMemo(() => {
+        const distinct = Array.from(new Set(allProducts.map((p) => p.category).filter(Boolean)))
+        return ['All', ...distinct, 'Testers']
+    }, [allProducts])
+
+    const filteredItems = useMemo(() => {
+        const query = searchQuery.trim().toLowerCase()
+        return catalogItems.filter(({ product, variant }) => {
+            if (selectedCategory === 'Testers' && !variant.isTester) return false
+            if (selectedCategory !== 'All' && selectedCategory !== 'Testers' && product.category !== selectedCategory) return false
+            if (!query) return true
+            return (
                 product.brand.toLowerCase().includes(query) ||
                 product.name.toLowerCase().includes(query) ||
-                product.category.toLowerCase().includes(query)
+                product.category.toLowerCase().includes(query) ||
+                variant.sku?.toLowerCase().includes(query)
             )
-            setFilteredProducts(filtered)
-        }
-    }, [searchQuery, allProducts])
+        })
+    }, [catalogItems, searchQuery, selectedCategory])
 
     const handleBarcodeSubmit = async (barcode: string) => {
         if (!barcode.trim()) return
@@ -251,14 +263,22 @@ export default function POSTerminal() {
 
             {/* Left Panel - Products Catalog */}
             <div className="flex-1 flex flex-col p-2 md:p-4 space-y-2 md:space-y-4 overflow-hidden md:border-r dark:md:border-gray-700">
-                {/* Barcode Scanner Button */}
-                <Button
-                    onClick={() => setIsScannerOpen(true)}
-                    className="w-full gap-2 bg-purple-600 hover:bg-purple-700 text-white py-2 md:py-3"
-                >
-                    <Scan className="h-4 w-4 md:h-5 md:w-5" />
-                    <span>Scan Barcode</span>
-                </Button>
+                {/* Physical/keyboard-wedge scanner is always listening - no button needed.
+                    This button is only the manual fallback when there's no scanner in hand. */}
+                <div className="flex items-center justify-between gap-2 bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-900 rounded-lg px-3 py-2">
+                    <span className="text-xs md:text-sm text-purple-700 dark:text-purple-300 font-medium">
+                        Scanner ready — just scan any item
+                    </span>
+                    <Button
+                        onClick={() => setIsScannerOpen(true)}
+                        size="sm"
+                        variant="outline"
+                        className="gap-1.5 shrink-0 border-purple-300 text-purple-700 dark:text-purple-300 dark:border-purple-700"
+                    >
+                        <Scan className="h-3.5 w-3.5" />
+                        <span>Use Camera</span>
+                    </Button>
+                </div>
 
                 {/* Last Added Product - Highlight */}
                 {lastAddedProduct && (
@@ -271,17 +291,37 @@ export default function POSTerminal() {
                 )}
 
                 {/* Search Bar */}
-                <Card className="p-2 md:p-4 dark:bg-gray-800 dark:border-gray-700">
-                    <div className="relative">
+                <div className="flex gap-2">
+                    <div className="relative flex-1">
                         <Search className="absolute left-2 md:left-3 top-2 md:top-3 h-3 w-3 md:h-4 md:w-4 text-gray-400" />
                         <Input
-                            placeholder="Search..."
+                            placeholder="Search all product here..."
                             className="pl-7 md:pl-10 text-xs md:text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white dark:placeholder:text-gray-400"
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
                         />
                     </div>
-                </Card>
+                    <Button variant="secondary" className="hidden md:inline-flex px-6">
+                        Search
+                    </Button>
+                </div>
+
+                {/* Category Tabs */}
+                <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+                    {categories.map((cat) => (
+                        <button
+                            key={cat}
+                            onClick={() => setSelectedCategory(cat)}
+                            className={`shrink-0 px-3 md:px-4 py-1.5 md:py-2 rounded-lg text-xs md:text-sm font-medium border transition-colors ${
+                                selectedCategory === cat
+                                    ? 'bg-gray-900 border-gray-900 text-white dark:bg-gray-100 dark:border-gray-100 dark:text-gray-900'
+                                    : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:border-gray-400'
+                            }`}
+                        >
+                            {cat}
+                        </button>
+                    ))}
+                </div>
 
                 {/* Mobile Cart Button */}
                 <div className="md:hidden flex gap-2">
@@ -294,77 +334,64 @@ export default function POSTerminal() {
                     </Button>
                 </div>
 
-                {/* Products Grid */}
+                {/* Products Grid - one uniform card per variant, so a product with
+                    many sizes never makes a single card taller than its neighbors */}
                 <div className="flex-1 overflow-auto">
                     {loading ? (
                         <div className="flex items-center justify-center h-full">
                             <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
                         </div>
-                    ) : filteredProducts.length === 0 ? (
+                    ) : filteredItems.length === 0 ? (
                         <div className="flex flex-col items-center justify-center h-full text-gray-500 dark:text-gray-400">
                             <Package className="h-10 w-10 md:h-12 md:w-12 mb-2 opacity-50" />
                             <p className="text-xs md:text-sm text-gray-600 dark:text-gray-400">No products found</p>
                         </div>
                     ) : (
-                        <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 md:gap-4">
-                            {filteredProducts.map((product) => (
-                                <div key={product.id} className="rounded-lg overflow-hidden bg-white dark:bg-gray-800 hover:shadow-xl transition-all cursor-pointer group border border-gray-200 dark:border-gray-700">
-                                    {/* Image section - no padding */}
-                                    <div className="relative">
-                                        {product.imageUrl && (
-                                            <img
-                                                src={product.imageUrl}
-                                                alt={product.name}
-                                                className="w-full h-24 md:h-44 object-cover group-hover:scale-105 transition-transform duration-300"
-                                            />
-                                        )}
-                                        <Badge className="absolute top-1 right-1 md:top-2 md:right-2 bg-pink-500 hover:bg-pink-600 text-white border-0 text-xs">
-                                            {product.category}
-                                        </Badge>
-                                    </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 gap-2 md:gap-4 items-start">
+                            {filteredItems.map(({ product, variant }) => {
+                                const stock = variant.inventory?.[0]?.quantity || 0
+                                const isOutOfStock = stock <= 0
+                                const isLowStock = !isOutOfStock && stock <= 5
 
-                                    {/* Content section - directly below image */}
-                                    <div className="p-2 md:p-3">
-                                        <h3 className="font-bold text-gray-900 dark:text-white text-xs md:text-sm mb-1">
-                                            {product.brand} {product.name}
-                                        </h3>
-                                        <p className="text-xs text-gray-600 dark:text-gray-400 mb-2 md:mb-3 line-clamp-1">
-                                            {product.description || 'Premium fragrance'}
-                                        </p>
-
-                                        {/* Price and stock buttons */}
-                                        <div className="space-y-1.5">
-                                            {product.variants?.map((variant: any) => {
-                                                const stock = variant.inventory?.[0]?.quantity || 0
-                                                const isOutOfStock = stock <= 0
-                                                
-                                                return (
-                                                    <button
-                                                        key={variant.id}
-                                                        onClick={() => !isOutOfStock && addProductToCart(variant, product)}
-                                                        disabled={isOutOfStock}
-                                                        className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-left transition-all ${
-                                                            isOutOfStock
-                                                                ? 'bg-gray-400 cursor-not-allowed opacity-60'
-                                                                : 'bg-blue-600 hover:bg-blue-700'
-                                                        }`}
-                                                    >
-                                                        <div className="flex flex-col gap-0.5 flex-1">
-                                                            <span className="text-xs font-semibold text-white">{variant.size}</span>
-                                                            <span className={`text-xs font-medium ${isOutOfStock ? 'text-white' : 'text-blue-100'}`}>
-                                                                {isOutOfStock ? 'Out of Stock' : `Stock: ${stock}`}
-                                                            </span>
-                                                        </div>
-                                                        <span className="text-sm font-bold text-white">
-                                                            {formatCurrency(variant.retailPrice)}
-                                                        </span>
-                                                    </button>
-                                                )
-                                            })}
+                                return (
+                                    <button
+                                        key={variant.id}
+                                        onClick={() => !isOutOfStock && addProductToCart(variant, product)}
+                                        disabled={isOutOfStock}
+                                        className={`text-left rounded-lg overflow-hidden bg-white dark:bg-gray-800 transition-all group border border-gray-200 dark:border-gray-700 ${
+                                            isOutOfStock ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-lg cursor-pointer'
+                                        }`}
+                                    >
+                                        {/* Image section - fixed aspect ratio keeps every card the same height */}
+                                        <div className="relative aspect-square bg-gray-100 dark:bg-gray-700 flex items-center justify-center">
+                                            {product.imageUrl ? (
+                                                <img
+                                                    src={product.imageUrl}
+                                                    alt={product.name}
+                                                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                                />
+                                            ) : (
+                                                <Package className="h-8 w-8 md:h-10 md:w-10 text-gray-300 dark:text-gray-500" />
+                                            )}
+                                            {(isOutOfStock || isLowStock) && (
+                                                <Badge className={`absolute top-1 right-1 text-white border-0 text-[10px] ${isOutOfStock ? 'bg-gray-500' : 'bg-amber-500'}`}>
+                                                    {isOutOfStock ? 'Out of stock' : `${stock} left`}
+                                                </Badge>
+                                            )}
                                         </div>
-                                    </div>
-                                </div>
-                            ))}
+
+                                        {/* Name + price - fixed two lines, never grows with variant count */}
+                                        <div className="p-2 md:p-3">
+                                            <h3 className="font-semibold text-gray-900 dark:text-white text-xs md:text-sm leading-snug line-clamp-2 min-h-[2.5em]">
+                                                {product.brand} {product.name} {variant.size}
+                                            </h3>
+                                            <p className="text-sm md:text-base font-bold text-gray-900 dark:text-white mt-1">
+                                                {formatCurrency(variant.retailPrice)}
+                                            </p>
+                                        </div>
+                                    </button>
+                                )
+                            })}
                         </div>
                     )}
                 </div>
@@ -390,9 +417,8 @@ export default function POSTerminal() {
                 {/* Cart Header */}
                 <div className="p-3 md:p-4 border-b dark:border-gray-700 hidden md:block">
                     <div className="flex items-center justify-between">
-                        <h2 className="text-lg md:text-xl font-semibold flex items-center dark:text-white">
-                            <ShoppingCart className="mr-2 h-4 w-4 md:h-5 md:w-5" />
-                            Cart ({cart.items.length})
+                        <h2 className="text-lg md:text-xl font-bold dark:text-white">
+                            Order Details
                         </h2>
                         {cart.items.length > 0 && (
                             <Button
@@ -416,54 +442,54 @@ export default function POSTerminal() {
                             <p className="text-xs md:text-sm text-center mt-1 text-gray-500 dark:text-gray-500">Click on products to add</p>
                         </div>
                     ) : (
-                        <div className="divide-y dark:divide-gray-700">
+                        <div className="p-2 md:p-3 space-y-2 md:space-y-3">
                             {cart.items.map((item) => (
-                                <div key={item.id} className="p-2 md:p-3">
-                                    <div className="flex gap-2 mb-2">
-                                        {item.imageUrl && (
+                                <div key={item.id} className="flex gap-3">
+                                    <div className="w-12 h-12 md:w-14 md:h-14 rounded-lg bg-gray-100 dark:bg-gray-700 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                                        {item.imageUrl ? (
                                             <img
                                                 src={item.imageUrl}
                                                 alt={item.productName}
-                                                className="w-10 md:w-12 h-10 md:h-12 object-cover rounded"
+                                                className="w-full h-full object-cover"
                                             />
+                                        ) : (
+                                            <Package className="h-5 w-5 md:h-6 md:w-6 text-gray-300 dark:text-gray-500" />
                                         )}
-                                        <div className="flex-1 min-w-0">
-                                            <h4 className="font-medium text-xs md:text-sm dark:text-white truncate">{item.productName}</h4>
-                                            <p className="text-xs dark:text-gray-400">{item.variantDetails}</p>
-                                        </div>
-                                        <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            className="h-6 w-6 md:h-8 md:w-8 flex-shrink-0"
-                                            onClick={() => cart.removeItem(item.variantId)}
-                                        >
-                                            <Trash2 className="h-3 w-3 md:h-4 md:w-4 text-red-500" />
-                                        </Button>
                                     </div>
-
-                                    <div className="flex items-center justify-between gap-1 md:gap-2">
-                                        <div className="flex items-center gap-1">
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-start justify-between gap-2">
+                                            <h4 className="font-semibold text-xs md:text-sm dark:text-white leading-snug">
+                                                {item.productName} {item.variantDetails}
+                                            </h4>
                                             <Button
-                                                variant="outline"
-                                                size="sm"
-                                                className="h-7 w-7 md:h-8 md:w-8 p-0 text-xs"
-                                                onClick={() => cart.updateQuantity(item.variantId, Math.max(1, item.quantity - 1))}
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-5 w-5 flex-shrink-0 -mt-1"
+                                                onClick={() => cart.removeItem(item.variantId)}
                                             >
-                                                -
-                                            </Button>
-                                            <span className="text-xs md:text-sm font-medium dark:text-white w-8 text-center">{item.quantity}</span>
-                                            <Button
-                                                variant="outline"
-                                                size="sm"
-                                                className="h-7 w-7 md:h-8 md:w-8 p-0 text-xs"
-                                                onClick={() => cart.updateQuantity(item.variantId, item.quantity + 1)}
-                                            >
-                                                +
+                                                <Trash2 className="h-3 w-3 text-red-500" />
                                             </Button>
                                         </div>
-                                        <span className="text-xs md:text-sm font-bold dark:text-white">
-                                            {formatCurrency(item.totalPrice)}
-                                        </span>
+                                        <div className="flex items-center justify-between mt-1">
+                                            <div className="flex items-center gap-1">
+                                                <button
+                                                    className="h-5 w-5 flex items-center justify-center rounded border border-gray-300 dark:border-gray-600 text-xs dark:text-gray-300"
+                                                    onClick={() => cart.updateQuantity(item.variantId, Math.max(1, item.quantity - 1))}
+                                                >
+                                                    -
+                                                </button>
+                                                <span className="text-xs text-gray-500 dark:text-gray-400 w-10 text-center">{item.quantity}x</span>
+                                                <button
+                                                    className="h-5 w-5 flex items-center justify-center rounded border border-gray-300 dark:border-gray-600 text-xs dark:text-gray-300"
+                                                    onClick={() => cart.updateQuantity(item.variantId, item.quantity + 1)}
+                                                >
+                                                    +
+                                                </button>
+                                            </div>
+                                            <span className="text-xs md:text-sm font-bold dark:text-white">
+                                                {formatCurrency(item.totalPrice)}
+                                            </span>
+                                        </div>
                                     </div>
                                 </div>
                             ))}
@@ -487,19 +513,19 @@ export default function POSTerminal() {
                     {/* Totals */}
                     <div className="p-2 md:p-4 space-y-1 md:space-y-2">
                         <div className="flex justify-between text-xs md:text-sm">
-                            <span className="text-gray-600 dark:text-gray-400">Subtotal</span>
+                            <span className="text-gray-500 dark:text-gray-400">Subtotal</span>
                             <span className="font-medium dark:text-white">{formatCurrency(cart.getSubtotal())}</span>
                         </div>
 
                         {cart.discount > 0 && (
-                            <div className="flex justify-between text-xs md:text-sm text-green-600">
-                                <span>Discount</span>
-                                <span>-{formatCurrency(cart.discount)}</span>
+                            <div className="flex justify-between text-xs md:text-sm">
+                                <span className="text-gray-500 dark:text-gray-400">Discount sales</span>
+                                <span className="text-gray-500 dark:text-gray-400">-{formatCurrency(cart.discount)}</span>
                             </div>
                         )}
 
                         <div className="flex justify-between text-xs md:text-sm">
-                            <span className="text-gray-600 dark:text-gray-400">Tax ({(taxRate * 100).toFixed(0)}%)</span>
+                            <span className="text-gray-500 dark:text-gray-400">Total sales tax ({(taxRate * 100).toFixed(0)}%)</span>
                             <span className="font-medium dark:text-white">{formatCurrency(cart.getTax(taxRate))}</span>
                         </div>
 
@@ -514,13 +540,12 @@ export default function POSTerminal() {
                     {/* Payment Buttons */}
                     <div className="p-2 md:p-3 space-y-1.5 md:space-y-2">
                         <Button
-                            className="w-full text-xs md:text-sm py-2 md:py-3"
+                            className="w-full text-sm md:text-base py-2.5 md:py-3.5 bg-gray-900 hover:bg-gray-800 text-white dark:bg-gray-100 dark:hover:bg-gray-300 dark:text-gray-900"
                             disabled={cart.items.length === 0 || isProcessing}
-                            onClick={() => handleCheckout('CASH')}
+                            onClick={() => setPendingPayment('CASH')}
                         >
-                            <Banknote className="mr-1 md:mr-2 h-3 w-3 md:h-4 md:w-4" />
-                            <span className="hidden sm:inline">Cash Payment</span>
-                            <span className="sm:hidden">Cash</span>
+                            <Banknote className="mr-1 md:mr-2 h-4 w-4" />
+                            Pay Now (Cash)
                         </Button>
 
                         <div className="grid grid-cols-2 gap-1 md:gap-2">
@@ -528,7 +553,7 @@ export default function POSTerminal() {
                                 variant="outline"
                                 className="text-xs md:text-sm py-2 md:py-3"
                                 disabled={cart.items.length === 0 || isProcessing}
-                                onClick={() => handleCheckout('CARD')}
+                                onClick={() => setPendingPayment('CARD')}
                             >
                                 <CreditCard className="mr-1 h-3 w-3 md:h-4 md:w-4" />
                                 <span className="hidden sm:inline">Card</span>
@@ -539,7 +564,7 @@ export default function POSTerminal() {
                                 variant="outline"
                                 className="text-xs md:text-sm py-2 md:py-3"
                                 disabled={cart.items.length === 0 || isProcessing}
-                                onClick={() => handleCheckout('MOBILE')}
+                                onClick={() => setPendingPayment('MOBILE')}
                             >
                                 <Smartphone className="mr-1 h-3 w-3 md:h-4 md:w-4" />
                                 <span className="hidden sm:inline">Mobile</span>
@@ -557,6 +582,76 @@ export default function POSTerminal() {
                 onScan={handleBarcodeSubmit}
                 variantIndex={0}
             />
+
+            {/* Confirm Order Modal - required before any payment is finalized */}
+            {pendingPayment && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                    <div className="w-full max-w-sm bg-white dark:bg-gray-800 rounded-lg shadow-xl">
+                        <div className="p-4 md:p-6 space-y-4">
+                            <div>
+                                <h2 className="text-lg md:text-xl font-semibold dark:text-white">Confirm Sale</h2>
+                                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                                    Please review the order before completing payment.
+                                </p>
+                            </div>
+
+                            <div className="max-h-48 overflow-auto divide-y dark:divide-gray-700 border-y dark:border-gray-700">
+                                {cart.items.map((item) => (
+                                    <div key={item.id} className="flex justify-between py-2 text-sm">
+                                        <span className="dark:text-gray-200">
+                                            {item.quantity}x {item.productName} {item.variantDetails}
+                                        </span>
+                                        <span className="font-medium dark:text-white">{formatCurrency(item.totalPrice)}</span>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="space-y-1 text-sm">
+                                <div className="flex justify-between">
+                                    <span className="text-gray-500 dark:text-gray-400">Subtotal</span>
+                                    <span className="dark:text-white">{formatCurrency(cart.getSubtotal())}</span>
+                                </div>
+                                {cart.discount > 0 && (
+                                    <div className="flex justify-between">
+                                        <span className="text-gray-500 dark:text-gray-400">Discount</span>
+                                        <span className="dark:text-white">-{formatCurrency(cart.discount)}</span>
+                                    </div>
+                                )}
+                                <div className="flex justify-between">
+                                    <span className="text-gray-500 dark:text-gray-400">Tax ({(taxRate * 100).toFixed(0)}%)</span>
+                                    <span className="dark:text-white">{formatCurrency(cart.getTax(taxRate))}</span>
+                                </div>
+                                <div className="flex justify-between text-base font-bold pt-1">
+                                    <span className="dark:text-white">Total ({pendingPayment === 'CASH' ? 'Cash' : pendingPayment === 'CARD' ? 'Card' : 'Mobile'})</span>
+                                    <span className="dark:text-white">{formatCurrency(cart.getTotal(taxRate))}</span>
+                                </div>
+                            </div>
+
+                            <div className="flex gap-3 justify-end pt-2">
+                                <Button
+                                    variant="outline"
+                                    onClick={() => setPendingPayment(null)}
+                                    disabled={isProcessing}
+                                    className="dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+                                >
+                                    Cancel
+                                </Button>
+                                <Button
+                                    onClick={() => {
+                                        const method = pendingPayment
+                                        setPendingPayment(null)
+                                        if (method) handleCheckout(method)
+                                    }}
+                                    disabled={isProcessing}
+                                    className="bg-gray-900 hover:bg-gray-800 text-white dark:bg-gray-100 dark:hover:bg-gray-300 dark:text-gray-900"
+                                >
+                                    {isProcessing ? 'Processing...' : 'Confirm & Complete Sale'}
+                                </Button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     )
 }

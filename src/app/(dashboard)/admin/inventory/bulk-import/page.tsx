@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -12,6 +12,7 @@ import Papa from 'papaparse'
 import * as XLSX from 'xlsx'
 import { formatCurrency } from '@/lib/utils/formatters'
 import BarcodeScannerModal from '@/components/barcode-scanner-modal'
+import { useBarcodeScanner } from '@/hooks/use-barcode-scanner'
 
 interface StockImportRow {
     sku: string
@@ -46,7 +47,22 @@ export default function BulkStockImportPage() {
     const [currentBarcode, setCurrentBarcode] = useState('')
     const [currentVendor, setCurrentVendor] = useState('')
     const [currentPrice, setCurrentPrice] = useState('')
+    const [currentQuantity, setCurrentQuantity] = useState('1')
     const [isScannerOpen, setIsScannerOpen] = useState(false)
+
+    // Remember the last vendor used (shared with the Receive Stock page) so it
+    // doesn't need retyping for every scan or every visit to this page.
+    useEffect(() => {
+        const saved = window.localStorage.getItem('perfume-pos:last-vendor')
+        if (saved) setCurrentVendor(saved)
+    }, [])
+
+    const rememberVendor = (vendor: string) => {
+        setCurrentVendor(vendor)
+        if (vendor.trim()) {
+            window.localStorage.setItem('perfume-pos:last-vendor', vendor)
+        }
+    }
 
     const validateRow = (row: StockImportRow, index: number): string | null => {
         // SKU is always required
@@ -228,11 +244,9 @@ export default function BulkStockImportPage() {
             if (data.success && data.variant && data.product) {
                 // Auto-fill form with product details
                 setCurrentBarcode(barcode)
-                setCurrentPrice(data.variant.wholesalePrice?.toString() || '')
-                // Focus on vendor field for user to enter
-                setTimeout(() => {
-                    // Will be used when vendor field is ready
-                }, 100)
+                if (!currentPrice && data.lastWholesalePrice != null) {
+                    setCurrentPrice(String(data.lastWholesalePrice))
+                }
                 toast.success(`Found: ${data.product.brand} ${data.product.name}`)
             } else {
                 toast.error('Product not found')
@@ -253,17 +267,12 @@ export default function BulkStockImportPage() {
             return
         }
 
-        if (!currentPrice || isNaN(Number(currentPrice))) {
-            toast.error('Please enter valid price')
-            return
-        }
-
         setIsLoading(true)
 
         try {
             // Fetch product details
             const response = await fetch(`/api/products/by-sku/${encodeURIComponent(sku)}`)
-            
+
             if (!response.ok) {
                 toast.error('Product not found. Check SKU.')
                 setIsLoading(false)
@@ -273,12 +282,27 @@ export default function BulkStockImportPage() {
             const data = await response.json()
 
             if (data.success && data.variant && data.product) {
+                // Use the typed price, or fall back to what this SKU last cost
+                const priceToUse = currentPrice.trim() && !isNaN(Number(currentPrice))
+                    ? currentPrice
+                    : (data.lastWholesalePrice != null ? String(data.lastWholesalePrice) : '')
+
+                if (!priceToUse) {
+                    toast.error('Enter a wholesale price - no previous price found for this SKU')
+                    setIsLoading(false)
+                    return
+                }
+
+                const quantityToUse = currentQuantity.trim() && Number(currentQuantity) > 0
+                    ? currentQuantity
+                    : '1'
+
                 const newItem: StockImportRow = {
                     sku,
-                    quantity: '1',
-                    wholesalePrice: currentPrice,
+                    quantity: quantityToUse,
+                    wholesalePrice: priceToUse,
                     vendor: currentVendor,
-                    manufactureDate: '',
+                    manufactureDate: new Date().toISOString().split('T')[0],
                 }
 
                 setScanItems([...scanItems, newItem])
@@ -296,7 +320,9 @@ export default function BulkStockImportPage() {
 
                 toast.success(`Added ${data.product.brand} ${data.product.name}`)
                 setCurrentBarcode('')
-                
+                setCurrentPrice('')
+                setCurrentQuantity('1')
+
                 // Focus back on barcode input
                 setTimeout(() => {
                     if (barcodeInputRef.current) {
@@ -312,6 +338,16 @@ export default function BulkStockImportPage() {
             setIsLoading(false)
         }
     }
+
+    // Same global scanner used on the POS terminal - listens window-wide so a
+    // physical scanner works no matter which field currently has focus (e.g.
+    // while editing Quantity or Vendor). Only acts while the Barcode Scan tab
+    // is open, so a stray scan doesn't sneak into the File Import tab.
+    useBarcodeScanner((value) => {
+        if (!barcodeMode) return
+        setCurrentBarcode(value)
+        handleBarcodeSubmit(value)
+    })
 
     const removeScanItem = (index: number) => {
         setScanItems(scanItems.filter((_, i) => i !== index))
@@ -543,8 +579,23 @@ export default function BulkStockImportPage() {
                     {activeTab === 'barcode' && (
                         <Card className="p-6 dark:bg-gray-800 dark:border-gray-700">
                             <h2 className="text-xl font-semibold mb-4 dark:text-white">Scan Products</h2>
-                            
+
                             <div className="space-y-4">
+                                <div className="flex items-center justify-between gap-2 bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-900 rounded-lg px-3 py-2">
+                                    <span className="text-xs md:text-sm text-purple-700 dark:text-purple-300 font-medium">
+                                        Scanner ready - no need to click the barcode field first
+                                    </span>
+                                    <Button
+                                        onClick={() => setIsScannerOpen(true)}
+                                        size="sm"
+                                        variant="outline"
+                                        className="gap-1.5 shrink-0 border-purple-300 text-purple-700 dark:text-purple-300 dark:border-purple-700"
+                                    >
+                                        <Scan className="h-3.5 w-3.5" />
+                                        <span>Use Camera</span>
+                                    </Button>
+                                </div>
+
                                 <div className="flex gap-2">
                                     <div className="flex-1">
                                         <label className="block text-sm font-medium mb-2 dark:text-gray-200">Barcode / SKU</label>
@@ -553,26 +604,10 @@ export default function BulkStockImportPage() {
                                             placeholder="Scan or type SKU..."
                                             value={currentBarcode}
                                             onChange={(e) => setCurrentBarcode(e.target.value)}
-                                            onKeyDown={(e) => {
-                                                if (e.key === 'Enter') {
-                                                    handleBarcodeSubmit(currentBarcode)
-                                                }
-                                            }}
                                             disabled={isLoading}
                                             autoFocus
                                             className="dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                                         />
-                                    </div>
-                                    <div className="flex items-end">
-                                        <Button
-                                            onClick={() => setIsScannerOpen(true)}
-                                            variant="outline"
-                                            size="icon"
-                                            title="Open camera scanner"
-                                            className="dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
-                                        >
-                                            <Scan className="h-4 w-4" />
-                                        </Button>
                                     </div>
                                 </div>
 
@@ -582,7 +617,8 @@ export default function BulkStockImportPage() {
                                         <Input
                                             type="number"
                                             min="1"
-                                            defaultValue="1"
+                                            value={currentQuantity}
+                                            onChange={(e) => setCurrentQuantity(e.target.value)}
                                             placeholder="1"
                                             className="dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                                         />
@@ -605,7 +641,7 @@ export default function BulkStockImportPage() {
                                     <Input
                                         placeholder="Supplier name"
                                         value={currentVendor}
-                                        onChange={(e) => setCurrentVendor(e.target.value)}
+                                        onChange={(e) => rememberVendor(e.target.value)}
                                         className="dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                                     />
                                 </div>

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ArrowLeft, Plus, Trash2, Upload, X, Scan } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, Upload, X, Scan, Keyboard, Wand2 } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import Image from 'next/image'
@@ -14,10 +14,24 @@ import { safeWriteAction, isServerActionHashMismatch } from '@/lib/utils/server-
 import { useBarcodeScanner } from '@/hooks/use-barcode-scanner'
 import BarcodeScannerModal from '@/components/barcode-scanner-modal'
 
+const PRESET_TYPES = ['EDP', 'EDT', 'EDC', 'Parfum']
+
+function generateSku(brand: string, name: string, size: string) {
+    const brandCode = brand.replace(/[^A-Za-z]/g, '').substring(0, 3).toUpperCase() || 'GEN'
+    const nameCode = name.replace(/[^A-Za-z]/g, '').substring(0, 3).toUpperCase() || 'PRD'
+    const sizeCode = size.replace(/[^0-9]/g, '')
+    const randomPart = Math.random().toString(36).substring(2, 6).toUpperCase()
+    return [brandCode, nameCode, sizeCode, randomPart].filter(Boolean).join('-')
+}
+
+function generateBarcode() {
+    return `${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`.slice(0, 13)
+}
+
 export default function NewProductPage() {
     const router = useRouter()
     const [isSubmitting, setIsSubmitting] = useState(false)
-    const [activeScanIndex, setActiveScanIndex] = useState<number | null>(null)
+    const [activeScanIndex, setActiveScanIndex] = useState<number | null>(0)
     const [isScannerModalOpen, setIsScannerModalOpen] = useState(false)
     const [scannerActiveVariantIndex, setScannerActiveVariantIndex] = useState<number | null>(null)
 
@@ -34,7 +48,6 @@ export default function NewProductPage() {
     const [images, setImages] = useState<File[]>([])
     const [imagePreviews, setImagePreviews] = useState<string[]>([])
 
-    const [customTypes, setCustomTypes] = useState<string[]>([])
     const [showCustomTypeInput, setShowCustomTypeInput] = useState<{ [key: number]: boolean }>({})
 
     const [variants, setVariants] = useState([
@@ -57,10 +70,16 @@ export default function NewProductPage() {
 
     const addVariant = () => {
         setVariants([...variants, { size: '', type: 'EDP', retailPrice: '', sku: '', barcode: '', isTester: false }])
+        setActiveScanIndex(variants.length) // scanning follows the newest row automatically
     }
 
     const removeVariant = (index: number) => {
         setVariants(variants.filter((_, i) => i !== index))
+        setActiveScanIndex((current) => {
+            if (current === null) return null
+            if (current === index) return Math.max(0, index - 1)
+            return current > index ? current - 1 : current
+        })
     }
 
     const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -382,70 +401,50 @@ export default function NewProductPage() {
                                     </div>
                                     <div>
                                         <label className="block text-sm font-medium mb-1 dark:text-gray-200">Type *</label>
-                                        {!showCustomTypeInput[index] ? (
-                                            <div className="space-y-2">
-                                                <select
-                                                    required
-                                                    value={variant.type}
-                                                    onChange={(e) => {
-                                                        if (e.target.value === 'custom') {
-                                                            setShowCustomTypeInput({ ...showCustomTypeInput, [index]: true })
-                                                        } else {
-                                                            const newVariants = [...variants]
-                                                            newVariants[index].type = e.target.value
-                                                            setVariants(newVariants)
-                                                        }
-                                                    }}
-                                                    className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                                                >
-                                                    <option value="">Select Type</option>
-                                                    <option value="EDP">EDP - Eau de Parfum (15-20% fragrance)</option>
-                                                    <option value="EDT">EDT - Eau de Toilette (5-15% fragrance)</option>
-                                                    <option value="EDC">EDC - Eau de Cologne (2-5% fragrance)</option>
-                                                    <option value="Parfum">Parfum - Pure Perfume (20-30% fragrance)</option>
-                                                    {customTypes.map((ct) => (
-                                                        <option key={ct} value={ct}>{ct}</option>
-                                                    ))}
-                                                    <option value="custom">+ Add Custom Type</option>
-                                                </select>
-                                            </div>
-                                        ) : (
-                                            <div className="space-y-2">
-                                                <Input
-                                                    autoFocus
-                                                    placeholder="Enter custom type"
-                                                    defaultValue={variant.type}
-                                                    onBlur={(e) => {
-                                                        if (e.target.value.trim()) {
-                                                            const newVariants = [...variants]
-                                                            newVariants[index].type = e.target.value.trim()
-                                                            setVariants(newVariants)
-                                                            if (!customTypes.includes(e.target.value.trim())) {
-                                                                setCustomTypes([...customTypes, e.target.value.trim()])
-                                                            }
-                                                            setShowCustomTypeInput({ ...showCustomTypeInput, [index]: false })
-                                                        }
-                                                    }}
-                                                    onKeyDown={(e) => {
-                                                        if (e.key === 'Enter' && e.currentTarget.value.trim()) {
-                                                            const newVariants = [...variants]
-                                                            newVariants[index].type = e.currentTarget.value.trim()
-                                                            setVariants(newVariants)
-                                                            if (!customTypes.includes(e.currentTarget.value.trim())) {
-                                                                setCustomTypes([...customTypes, e.currentTarget.value.trim()])
-                                                            }
-                                                            setShowCustomTypeInput({ ...showCustomTypeInput, [index]: false })
-                                                        }
-                                                    }}
-                                                />
+                                        <div className="flex flex-wrap gap-2">
+                                            {PRESET_TYPES.map((t) => (
                                                 <button
+                                                    key={t}
                                                     type="button"
-                                                    onClick={() => setShowCustomTypeInput({ ...showCustomTypeInput, [index]: false })}
-                                                    className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
+                                                    onClick={() => {
+                                                        const newVariants = [...variants]
+                                                        newVariants[index].type = t
+                                                        setVariants(newVariants)
+                                                        setShowCustomTypeInput({ ...showCustomTypeInput, [index]: false })
+                                                    }}
+                                                    className={`px-3 py-2 rounded-md text-sm font-medium border transition ${
+                                                        variant.type === t && !showCustomTypeInput[index]
+                                                            ? 'bg-blue-600 border-blue-600 text-white'
+                                                            : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:border-gray-400'
+                                                    }`}
                                                 >
-                                                    Cancel
+                                                    {t}
                                                 </button>
-                                            </div>
+                                            ))}
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowCustomTypeInput({ ...showCustomTypeInput, [index]: true })}
+                                                className={`px-3 py-2 rounded-md text-sm font-medium border transition ${
+                                                    showCustomTypeInput[index]
+                                                        ? 'bg-blue-600 border-blue-600 text-white'
+                                                        : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:border-gray-400'
+                                                }`}
+                                            >
+                                                Other
+                                            </button>
+                                        </div>
+                                        {showCustomTypeInput[index] && (
+                                            <Input
+                                                autoFocus
+                                                className="mt-2"
+                                                placeholder="Enter type, e.g. Attar"
+                                                value={variant.type}
+                                                onChange={(e) => {
+                                                    const newVariants = [...variants]
+                                                    newVariants[index].type = e.target.value
+                                                    setVariants(newVariants)
+                                                }}
+                                            />
                                         )}
                                     </div>
                                     <div>
@@ -459,22 +458,38 @@ export default function NewProductPage() {
                                                     newVariants[index].sku = e.target.value
                                                     setVariants(newVariants)
                                                 }}
-                                                placeholder="e.g., CHANEL-NO5-50ML"
+                                                placeholder="Auto-filled, or type your own"
                                                 className={activeScanIndex === index ? 'ring-2 ring-blue-500' : ''}
                                             />
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => {
+                                                    const newVariants = [...variants]
+                                                    newVariants[index].sku = generateSku(product.brand, product.name, variant.size)
+                                                    setVariants(newVariants)
+                                                }}
+                                                title="Generate a SKU automatically"
+                                            >
+                                                <Wand2 className="h-4 w-4" />
+                                            </Button>
                                             <Button
                                                 type="button"
                                                 variant={activeScanIndex === index ? 'default' : 'outline'}
                                                 size="sm"
                                                 onClick={() => {
                                                     setActiveScanIndex(activeScanIndex === index ? null : index)
-                                                    toast.info(activeScanIndex === index ? 'Scanning disabled' : 'Ready to scan SKU')
+                                                    toast.info(activeScanIndex === index ? 'Scanning disabled' : 'Ready to scan SKU with a keyboard scanner')
                                                 }}
-                                                title="Click to enable/disable SKU scanning"
+                                                title={activeScanIndex === index ? 'Scanning is ON — scan now, click to turn off' : 'Turn on keyboard barcode-scanner input for this field'}
                                             >
-                                                {activeScanIndex === index ? '⊙' : '⊙'}
+                                                <Keyboard className="h-4 w-4" />
                                             </Button>
                                         </div>
+                                        {activeScanIndex === index && (
+                                            <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">Scanning ON — scan the SKU now</p>
+                                        )}
                                     </div>
                                     <div>
                                         <label className="block text-sm font-medium mb-1 dark:text-gray-200">Barcode</label>
@@ -486,9 +501,22 @@ export default function NewProductPage() {
                                                     newVariants[index].barcode = e.target.value
                                                     setVariants(newVariants)
                                                 }}
-                                                placeholder="e.g., 3614270053124"
+                                                placeholder="Auto-filled, or scan one"
                                                 className={activeScanIndex === index ? 'ring-2 ring-blue-500' : ''}
                                             />
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => {
+                                                    const newVariants = [...variants]
+                                                    newVariants[index].barcode = generateBarcode()
+                                                    setVariants(newVariants)
+                                                }}
+                                                title="Generate a barcode automatically"
+                                            >
+                                                <Wand2 className="h-4 w-4" />
+                                            </Button>
                                             <Button
                                                 type="button"
                                                 variant="default"
@@ -497,7 +525,7 @@ export default function NewProductPage() {
                                                     setScannerActiveVariantIndex(index)
                                                     setIsScannerModalOpen(true)
                                                 }}
-                                                title="Open barcode scanner modal"
+                                                title="Scan a barcode with the camera"
                                                 className="bg-blue-600 hover:bg-blue-700"
                                             >
                                                 <Scan className="h-4 w-4" />

@@ -74,7 +74,12 @@ export default function RootLayout({
         <Toaster position="top-right" richColors />
         <script>
           {`
-            if ('serviceWorker' in navigator) {
+            // next-pwa generates /sw.js via a Webpack plugin, but \`next dev\`
+            // runs on Turbopack, which never invokes it - so the file doesn't
+            // exist in dev and registering it there always 404s. Only the real
+            // production build (Webpack) actually produces the file.
+            const isProd = ${JSON.stringify(process.env.NODE_ENV === 'production')};
+            if (isProd && 'serviceWorker' in navigator) {
               window.addEventListener('load', () => {
                 navigator.serviceWorker.register('/sw.js').then(
                   (registration) => {
@@ -85,10 +90,12 @@ export default function RootLayout({
                   }
                 );
               });
+            } else if (!isProd) {
+              console.log('Service worker registration skipped in development (Turbopack does not generate sw.js)');
             } else {
               console.warn('Service Workers not supported');
             }
-            
+
             // Log PWA installation checks
             console.log('PWA Install Check:');
             console.log('Manifest:', document.querySelector('link[rel="manifest"]')?.href);
