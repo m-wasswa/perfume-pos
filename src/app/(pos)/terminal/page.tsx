@@ -1,12 +1,13 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import Image from 'next/image'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { useBarcodeScanner } from '@/hooks/use-barcode-scanner'
 import { useCartStore } from '@/store/cart-store'
 import { getProductBySKU, getProducts } from '@/lib/actions/products'
-import { createOrder } from '@/lib/actions/orders'
+import { createOrder, getOrders } from '@/lib/actions/orders'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
@@ -22,10 +23,15 @@ import {
     Loader2,
     Package,
     LayoutDashboard,
-    Scan
+    Scan,
+    History,
+    Printer,
+    ArrowLeft,
+    X,
+    Receipt
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { formatCurrency } from '@/lib/utils/formatters'
+import { formatCurrency, formatDateTime } from '@/lib/utils/formatters'
 
 export default function POSTerminal() {
     const { data: session } = useSession()
@@ -42,6 +48,13 @@ export default function POSTerminal() {
     const [lastAddedProduct, setLastAddedProduct] = useState<any>(null)
     const [isScannerOpen, setIsScannerOpen] = useState(false)
     const [pendingPayment, setPendingPayment] = useState<'CASH' | 'CARD' | 'MOBILE' | null>(null)
+    const [isHistoryOpen, setIsHistoryOpen] = useState(false)
+    const [orders, setOrders] = useState<any[]>([])
+    const [ordersLoading, setOrdersLoading] = useState(false)
+    const [orderSearch, setOrderSearch] = useState('')
+    const [onlyMine, setOnlyMine] = useState(false)
+    const [selectedOrder, setSelectedOrder] = useState<any | null>(null)
+    const [reprintingId, setReprintingId] = useState<string | null>(null)
     const cart = useCartStore()
 
     // Load settings and products on mount
@@ -49,6 +62,16 @@ export default function POSTerminal() {
         loadSettings()
         loadProducts()
     }, [])
+
+    // Load order history whenever the panel is open, debounced on search/filter changes
+    useEffect(() => {
+        if (!isHistoryOpen) return
+        const timer = setTimeout(() => {
+            loadOrders()
+        }, 300)
+        return () => clearTimeout(timer)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isHistoryOpen, orderSearch, onlyMine])
 
     const loadSettings = async () => {
         try {
@@ -182,6 +205,60 @@ export default function POSTerminal() {
         }
     }
 
+    const loadOrders = async () => {
+        setOrdersLoading(true)
+        const result = await getOrders({ search: orderSearch, onlyMine })
+        if (result.success && result.orders) {
+            setOrders(result.orders)
+        } else {
+            toast.error(result.error || 'Failed to load order history')
+        }
+        setOrdersLoading(false)
+    }
+
+    // Shared with checkout auto-print and manual reprint from Order History.
+    // silent: true suppresses the error toast (checkout already succeeded; printing is optional there).
+    const printReceipt = async (orderId: string, options: { silent?: boolean } = {}) => {
+        try {
+            const isDevelopment = process.env.NODE_ENV === 'development'
+
+            if (isDevelopment) {
+                // Generate PDF receipt in development
+                const response = await fetch('/api/print/pdf-receipt', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ orderId })
+                })
+
+                if (!response.ok) throw new Error('Failed to generate receipt')
+
+                const { receipt } = await response.json()
+                const { generateReceiptPDF } = await import('@/lib/utils/pdf-receipt')
+                generateReceiptPDF(receipt)
+                toast.success('Receipt downloaded as PDF')
+            } else {
+                // Use physical printer in production
+                const response = await fetch('/api/print/receipt', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ orderId })
+                })
+
+                if (!response.ok) throw new Error('Failed to print receipt')
+                toast.success('Receipt sent to printer')
+            }
+        } catch (error) {
+            console.error('Print error:', error)
+            if (!options.silent) toast.error('Failed to print receipt')
+        }
+    }
+
+    const handleReprint = async (orderId: string) => {
+        setReprintingId(orderId)
+        await printReceipt(orderId)
+        setReprintingId(null)
+    }
+
     const handleCheckout = async (paymentMethod: 'CASH' | 'CARD' | 'MOBILE') => {
         if (cart.items.length === 0) {
             toast.error('Cart is empty')
@@ -208,37 +285,10 @@ export default function POSTerminal() {
             toast.success('Order completed successfully')
             cart.clearCart()
 
-            // Print receipt (PDF in development, physical printer in production)
+            // Print receipt (PDF in development, physical printer in production).
+            // Silent because printing is optional — the sale already succeeded.
             if (result.order) {
-                try {
-                    const isDevelopment = process.env.NODE_ENV === 'development'
-
-                    if (isDevelopment) {
-                        // Generate PDF receipt in development
-                        const response = await fetch('/api/print/pdf-receipt', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ orderId: result.order.id })
-                        })
-
-                        if (response.ok) {
-                            const { receipt } = await response.json()
-                            const { generateReceiptPDF } = await import('@/lib/utils/pdf-receipt')
-                            generateReceiptPDF(receipt)
-                            toast.success('Receipt downloaded as PDF')
-                        }
-                    } else {
-                        // Use physical printer in production
-                        await fetch('/api/print/receipt', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ orderId: result.order.id })
-                        })
-                    }
-                } catch (printError) {
-                    console.error('Print error:', printError)
-                    // Don't show error to user, printing is optional
-                }
+                await printReceipt(result.order.id, { silent: true })
             }
         } else {
             toast.error(result.error || 'Order failed')
@@ -269,15 +319,29 @@ export default function POSTerminal() {
                     <span className="text-xs md:text-sm text-purple-700 dark:text-purple-300 font-medium">
                         Scanner ready — just scan any item
                     </span>
-                    <Button
-                        onClick={() => setIsScannerOpen(true)}
-                        size="sm"
-                        variant="outline"
-                        className="gap-1.5 shrink-0 border-purple-300 text-purple-700 dark:text-purple-300 dark:border-purple-700"
-                    >
-                        <Scan className="h-3.5 w-3.5" />
-                        <span>Use Camera</span>
-                    </Button>
+                    <div className="flex items-center gap-2 shrink-0">
+                        <Button
+                            onClick={() => {
+                                setSelectedOrder(null)
+                                setIsHistoryOpen(true)
+                            }}
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5 shrink-0 border-purple-300 text-purple-700 dark:text-purple-300 dark:border-purple-700"
+                        >
+                            <History className="h-3.5 w-3.5" />
+                            <span>History</span>
+                        </Button>
+                        <Button
+                            onClick={() => setIsScannerOpen(true)}
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5 shrink-0 border-purple-300 text-purple-700 dark:text-purple-300 dark:border-purple-700"
+                        >
+                            <Scan className="h-3.5 w-3.5" />
+                            <span>Use Camera</span>
+                        </Button>
+                    </div>
                 </div>
 
                 {/* Last Added Product - Highlight */}
@@ -365,10 +429,13 @@ export default function POSTerminal() {
                                         {/* Image section - fixed aspect ratio keeps every card the same height */}
                                         <div className="relative aspect-square bg-gray-100 dark:bg-gray-700 flex items-center justify-center">
                                             {product.imageUrl ? (
-                                                <img
+                                                <Image
                                                     src={product.imageUrl}
                                                     alt={product.name}
-                                                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                                    fill
+                                                    loading="lazy"
+                                                    sizes="(max-width: 768px) 50vw, 25vw"
+                                                    className="object-cover group-hover:scale-105 transition-transform duration-300"
                                                 />
                                             ) : (
                                                 <Package className="h-8 w-8 md:h-10 md:w-10 text-gray-300 dark:text-gray-500" />
@@ -385,6 +452,9 @@ export default function POSTerminal() {
                                             <h3 className="font-semibold text-gray-900 dark:text-white text-xs md:text-sm leading-snug line-clamp-2 min-h-[2.5em]">
                                                 {product.brand} {product.name} {variant.size}
                                             </h3>
+                                            <p className="text-[10px] md:text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">
+                                                SKU: {variant.sku}
+                                            </p>
                                             <p className="text-sm md:text-base font-bold text-gray-900 dark:text-white mt-1">
                                                 {formatCurrency(variant.retailPrice)}
                                             </p>
@@ -445,12 +515,14 @@ export default function POSTerminal() {
                         <div className="p-2 md:p-3 space-y-2 md:space-y-3">
                             {cart.items.map((item) => (
                                 <div key={item.id} className="flex gap-3">
-                                    <div className="w-12 h-12 md:w-14 md:h-14 rounded-lg bg-gray-100 dark:bg-gray-700 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                                    <div className="relative w-12 h-12 md:w-14 md:h-14 rounded-lg bg-gray-100 dark:bg-gray-700 flex items-center justify-center flex-shrink-0 overflow-hidden">
                                         {item.imageUrl ? (
-                                            <img
+                                            <Image
                                                 src={item.imageUrl}
                                                 alt={item.productName}
-                                                className="w-full h-full object-cover"
+                                                fill
+                                                sizes="56px"
+                                                className="object-cover"
                                             />
                                         ) : (
                                             <Package className="h-5 w-5 md:h-6 md:w-6 text-gray-300 dark:text-gray-500" />
@@ -649,6 +721,192 @@ export default function POSTerminal() {
                                 </Button>
                             </div>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Order History Modal - browse past sales and reprint receipts */}
+            {isHistoryOpen && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                    <div className="w-full max-w-lg bg-white dark:bg-gray-800 rounded-lg shadow-xl flex flex-col max-h-[85vh]">
+                        {/* Header */}
+                        <div className="p-4 border-b dark:border-gray-700 flex items-center justify-between gap-2 shrink-0">
+                            <div className="flex items-center gap-2 min-w-0">
+                                {selectedOrder && (
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-7 w-7 -ml-1 shrink-0 dark:text-gray-300 dark:hover:bg-gray-700"
+                                        onClick={() => setSelectedOrder(null)}
+                                    >
+                                        <ArrowLeft className="h-4 w-4" />
+                                    </Button>
+                                )}
+                                <h2 className="text-lg font-semibold dark:text-white truncate">
+                                    {selectedOrder ? `Order ${selectedOrder.orderNumber}` : 'Order History'}
+                                </h2>
+                            </div>
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 shrink-0 dark:text-gray-300 dark:hover:bg-gray-700"
+                                onClick={() => {
+                                    setIsHistoryOpen(false)
+                                    setSelectedOrder(null)
+                                }}
+                            >
+                                <X className="h-4 w-4" />
+                            </Button>
+                        </div>
+
+                        {selectedOrder ? (
+                            /* Order detail view */
+                            <>
+                                <div className="flex-1 overflow-auto p-4 space-y-4">
+                                    <div className="grid grid-cols-2 gap-3 text-xs md:text-sm">
+                                        <div>
+                                            <p className="text-gray-500 dark:text-gray-400">Date</p>
+                                            <p className="font-medium dark:text-white">{formatDateTime(selectedOrder.createdAt)}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-gray-500 dark:text-gray-400">Cashier</p>
+                                            <p className="font-medium dark:text-white">{selectedOrder.cashier?.name || '-'}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-gray-500 dark:text-gray-400">Customer</p>
+                                            <p className="font-medium dark:text-white">{selectedOrder.customer?.name || 'Walk-in Customer'}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-gray-500 dark:text-gray-400">Payment</p>
+                                            <p className="font-medium dark:text-white">{selectedOrder.paymentMethod}</p>
+                                        </div>
+                                    </div>
+
+                                    {selectedOrder.status !== 'COMPLETED' && (
+                                        <Badge variant={selectedOrder.status === 'REFUNDED' ? 'destructive' : 'secondary'}>
+                                            {selectedOrder.status}
+                                        </Badge>
+                                    )}
+
+                                    <div className="divide-y dark:divide-gray-700 border-y dark:border-gray-700">
+                                        {selectedOrder.items.map((item: any) => (
+                                            <div key={item.id} className="flex justify-between py-2 text-sm gap-2">
+                                                <span className="dark:text-gray-200">
+                                                    {item.quantity}x {item.variant.product.brand} {item.variant.product.name} {item.variant.size}
+                                                </span>
+                                                <span className="font-medium dark:text-white shrink-0">{formatCurrency(item.totalPrice)}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    <div className="space-y-1 text-sm">
+                                        <div className="flex justify-between">
+                                            <span className="text-gray-500 dark:text-gray-400">Subtotal</span>
+                                            <span className="dark:text-white">{formatCurrency(selectedOrder.subtotal)}</span>
+                                        </div>
+                                        {selectedOrder.discount > 0 && (
+                                            <div className="flex justify-between">
+                                                <span className="text-gray-500 dark:text-gray-400">Discount</span>
+                                                <span className="dark:text-white">-{formatCurrency(selectedOrder.discount)}</span>
+                                            </div>
+                                        )}
+                                        <div className="flex justify-between">
+                                            <span className="text-gray-500 dark:text-gray-400">Tax</span>
+                                            <span className="dark:text-white">{formatCurrency(selectedOrder.tax)}</span>
+                                        </div>
+                                        <div className="flex justify-between text-base font-bold pt-1">
+                                            <span className="dark:text-white">Total</span>
+                                            <span className="dark:text-white">{formatCurrency(selectedOrder.total)}</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="p-4 border-t dark:border-gray-700 shrink-0">
+                                    <Button
+                                        className="w-full gap-2 bg-gray-900 hover:bg-gray-800 text-white dark:bg-gray-100 dark:hover:bg-gray-300 dark:text-gray-900"
+                                        disabled={reprintingId === selectedOrder.id}
+                                        onClick={() => handleReprint(selectedOrder.id)}
+                                    >
+                                        {reprintingId === selectedOrder.id ? (
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                        ) : (
+                                            <Printer className="h-4 w-4" />
+                                        )}
+                                        Reprint Receipt
+                                    </Button>
+                                </div>
+                            </>
+                        ) : (
+                            /* Order list view */
+                            <>
+                                <div className="p-3 border-b dark:border-gray-700 space-y-2 shrink-0">
+                                    <div className="relative">
+                                        <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-gray-400" />
+                                        <Input
+                                            placeholder="Search by order #, customer, or cashier..."
+                                            className="pl-8 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                                            value={orderSearch}
+                                            onChange={(e) => setOrderSearch(e.target.value)}
+                                        />
+                                    </div>
+                                    <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
+                                        <input
+                                            type="checkbox"
+                                            checked={onlyMine}
+                                            onChange={(e) => setOnlyMine(e.target.checked)}
+                                            className="h-3.5 w-3.5"
+                                        />
+                                        Only my sales
+                                    </label>
+                                </div>
+
+                                <div className="flex-1 overflow-auto">
+                                    {ordersLoading ? (
+                                        <div className="flex items-center justify-center py-12">
+                                            <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+                                        </div>
+                                    ) : orders.length === 0 ? (
+                                        <div className="flex flex-col items-center justify-center py-12 text-gray-400 dark:text-gray-500">
+                                            <Receipt className="h-10 w-10 mb-2 opacity-50" />
+                                            <p className="text-sm">No orders found</p>
+                                        </div>
+                                    ) : (
+                                        <div className="divide-y dark:divide-gray-700">
+                                            {orders.map((order) => (
+                                                <button
+                                                    key={order.id}
+                                                    onClick={() => setSelectedOrder(order)}
+                                                    className="w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+                                                >
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <span className="font-medium text-sm dark:text-white truncate">
+                                                            {order.orderNumber}
+                                                        </span>
+                                                        <span className="font-bold text-sm dark:text-white shrink-0">
+                                                            {formatCurrency(order.total)}
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex items-center justify-between gap-2 mt-1">
+                                                        <span className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                                                            {formatDateTime(order.createdAt)} · {order.cashier?.name}
+                                                        </span>
+                                                        {order.status !== 'COMPLETED' ? (
+                                                            <Badge variant={order.status === 'REFUNDED' ? 'destructive' : 'secondary'} className="text-[10px] shrink-0">
+                                                                {order.status}
+                                                            </Badge>
+                                                        ) : (
+                                                            <Badge variant="outline" className="text-[10px] shrink-0 dark:text-gray-300 dark:border-gray-600">
+                                                                {order.paymentMethod}
+                                                            </Badge>
+                                                        )}
+                                                    </div>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </>
+                        )}
                     </div>
                 </div>
             )}

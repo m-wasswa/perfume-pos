@@ -151,6 +151,85 @@ export async function createOrder(data: CreateOrderData) {
     }
 }
 
+interface GetOrdersParams {
+    search?: string
+    onlyMine?: boolean
+    limit?: number
+}
+
+export async function getOrders(params: GetOrdersParams = {}) {
+    try {
+        const session = await getServerSession(authOptions)
+        if (!session?.user) {
+            return { success: false, error: 'Unauthorized' }
+        }
+
+        // Try to find store assigned to user, fallback to first store
+        let store = await prisma.store.findFirst({
+            where: { users: { some: { id: session.user.id } } }
+        })
+
+        if (!store) {
+            store = await prisma.store.findFirst()
+        }
+
+        if (!store) {
+            return { success: false, error: 'No store configured in the system' }
+        }
+
+        const { search, onlyMine, limit = 50 } = params
+
+        const where: any = {
+            storeId: store.id,
+            isOnHold: false,
+        }
+
+        if (onlyMine) {
+            // Get the actual user from database (session.user.id might not match DB user.id)
+            let cashier = await prisma.user.findUnique({
+                where: { email: session.user.email! }
+            })
+            if (!cashier) {
+                cashier = await prisma.user.findFirst()
+            }
+            if (cashier) {
+                where.cashierId = cashier.id
+            }
+        }
+
+        if (search && search.trim()) {
+            const q = search.trim()
+            where.OR = [
+                { orderNumber: { contains: q, mode: 'insensitive' } },
+                { customer: { name: { contains: q, mode: 'insensitive' } } },
+                { cashier: { name: { contains: q, mode: 'insensitive' } } },
+            ]
+        }
+
+        const orders = await prisma.order.findMany({
+            where,
+            include: {
+                items: {
+                    include: {
+                        variant: {
+                            include: { product: true }
+                        }
+                    }
+                },
+                customer: true,
+                cashier: true,
+            },
+            orderBy: { createdAt: 'desc' },
+            take: Math.min(limit, 200),
+        })
+
+        return { success: true, orders }
+    } catch (error) {
+        console.error('Get orders failed:', error)
+        return { success: false, error: 'Failed to load orders' }
+    }
+}
+
 export async function holdOrder(data: CreateOrderData) {
     try {
         const session = await getServerSession(authOptions)
