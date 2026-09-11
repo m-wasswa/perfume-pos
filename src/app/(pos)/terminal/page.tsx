@@ -234,7 +234,7 @@ export default function POSTerminal() {
 
                 const { receipt } = await response.json()
                 const { generateReceiptPDF } = await import('@/lib/utils/pdf-receipt')
-                generateReceiptPDF(receipt)
+                await generateReceiptPDF(receipt)
                 toast.success('Receipt downloaded as PDF')
             } else {
                 // Use physical printer in production

@@ -30,6 +30,7 @@ model Store {
   name          String
   address       String
   phone         String
+  logoUrl       String?
   taxRate       Float       @default(0.08)
   users         User[]
   inventory     Inventory[]

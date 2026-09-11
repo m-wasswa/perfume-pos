@@ -43,7 +43,8 @@ export async function POST(req: NextRequest) {
                 store: {
                     name: order.store.name,
                     address: order.store.address,
-                    phone: order.store.phone
+                    phone: order.store.phone,
+                    logoUrl: order.store.logoUrl || undefined
                 },
                 cashier: order.cashier.name,
                 customer: order.customer?.name || 'Walk-in Customer',

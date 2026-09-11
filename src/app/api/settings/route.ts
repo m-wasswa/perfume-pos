@@ -36,7 +36,7 @@ export async function PUT(req: NextRequest) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
         }
 
-        const { name, address, phone, taxRate, logo } = await req.json()
+        const { name, address, phone, taxRate, logoUrl } = await req.json()
 
         // Validate required fields
         if (!name || !address || !phone || taxRate === undefined) {
@@ -69,8 +69,7 @@ export async function PUT(req: NextRequest) {
                 address,
                 phone,
                 taxRate,
-                // Note: In a real app, you'd upload the logo to cloud storage
-                // For now, we'll store the base64 data URL (not recommended for production)
+                logoUrl
             }
         })
 

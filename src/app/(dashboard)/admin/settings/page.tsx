@@ -14,14 +14,15 @@ interface StoreSettings {
     address: string
     phone: string
     taxRate: number
-    logo?: string
+    logoUrl?: string
 }
 
 export default function SettingsPage() {
     const [settings, setSettings] = useState<StoreSettings | null>(null)
     const [isLoading, setIsLoading] = useState(true)
     const [isSaving, setIsSaving] = useState(false)
-    const [logoPreview, setLogoPreview] = useState<string | null>(null)
+    const [isUploadingLogo, setIsUploadingLogo] = useState(false)
+    const [logoUrl, setLogoUrl] = useState<string | null>(null)
 
     useEffect(() => {
         fetchSettings()
@@ -33,8 +34,8 @@ export default function SettingsPage() {
             if (response.ok) {
                 const data = await response.json()
                 setSettings(data.store)
-                if (data.store.logo) {
-                    setLogoPreview(data.store.logo)
+                if (data.store.logoUrl) {
+                    setLogoUrl(data.store.logoUrl)
                 }
             }
         } catch (error) {
@@ -44,15 +45,31 @@ export default function SettingsPage() {
         }
     }
 
-    const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleLogoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0]
-        if (file) {
-            // Create preview
-            const reader = new FileReader()
-            reader.onloadend = () => {
-                setLogoPreview(reader.result as string)
+        if (!file) return
+
+        setIsUploadingLogo(true)
+        try {
+            const formData = new FormData()
+            formData.append('file', file)
+
+            const response = await fetch('/api/admin/upload-logo', {
+                method: 'POST',
+                body: formData
+            })
+
+            if (response.ok) {
+                const data = await response.json()
+                setLogoUrl(data.logoUrl)
+                toast.success('Logo uploaded')
+            } else {
+                toast.error('Failed to upload logo')
             }
-            reader.readAsDataURL(file)
+        } catch (error) {
+            toast.error('Failed to upload logo')
+        } finally {
+            setIsUploadingLogo(false)
         }
     }
 
@@ -68,7 +85,7 @@ export default function SettingsPage() {
                 address: formData.get('address') as string,
                 phone: formData.get('phone') as string,
                 taxRate: parseFloat(formData.get('taxRate') as string) / 100, // Convert percentage to decimal
-                logo: logoPreview
+                logoUrl
             }
 
             const response = await fetch('/api/settings', {
@@ -182,10 +199,10 @@ export default function SettingsPage() {
                 <Card className="p-6 dark:bg-gray-800 dark:border-gray-700">
                     <h2 className="text-xl font-semibold mb-4 dark:text-white">Business Logo</h2>
                     <div className="space-y-4">
-                        {logoPreview && (
+                        {logoUrl && (
                             <div className="flex justify-center">
                                 <img
-                                    src={logoPreview}
+                                    src={logoUrl}
                                     alt="Logo preview"
                                     className="h-32 w-32 object-contain border-2 border-gray-200 dark:border-gray-600 rounded-lg p-2"
                                 />
@@ -196,12 +213,16 @@ export default function SettingsPage() {
                             <div className="mt-2">
                                 <label className="flex items-center justify-center w-full px-4 py-6 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:border-blue-500 dark:hover:border-blue-500 transition-colors">
                                     <div className="text-center">
-                                        <Upload className="h-8 w-8 mx-auto mb-2 text-gray-400" />
+                                        {isUploadingLogo ? (
+                                            <Loader2 className="h-8 w-8 mx-auto mb-2 text-gray-400 animate-spin" />
+                                        ) : (
+                                            <Upload className="h-8 w-8 mx-auto mb-2 text-gray-400" />
+                                        )}
                                         <p className="text-sm text-gray-600 dark:text-gray-400">
-                                            Click to upload or drag and drop
+                                            {isUploadingLogo ? 'Uploading...' : 'Click to upload or drag and drop'}
                                         </p>
                                         <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
-                                            PNG, JPG up to 2MB
+                                            PNG, JPG up to 2MB. This appears on printed receipts.
                                         </p>
                                     </div>
                                     <input
@@ -209,6 +230,7 @@ export default function SettingsPage() {
                                         type="file"
                                         accept="image/*"
                                         onChange={handleLogoChange}
+                                        disabled={isUploadingLogo}
                                         className="hidden"
                                     />
                                 </label>
@@ -222,7 +244,7 @@ export default function SettingsPage() {
                     <Button
                         type="submit"
                         size="lg"
-                        disabled={isSaving}
+                        disabled={isSaving || isUploadingLogo}
                         className="min-w-[150px]"
                     >
                         {isSaving ? (

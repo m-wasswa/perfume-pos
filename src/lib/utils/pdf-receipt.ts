@@ -7,6 +7,7 @@ interface ReceiptData {
         name: string
         address: string
         phone: string
+        logoUrl?: string
     }
     cashier: string
     customer: string
@@ -24,13 +25,52 @@ interface ReceiptData {
     paymentMethod: string
 }
 
-export function generateReceiptPDF(receipt: ReceiptData) {
+// Normalizes any source format (PNG/JPEG/WEBP/etc.) to a PNG data URL so
+// jsPDF's addImage doesn't need to guess the encoding from the file extension.
+async function loadImageAsPngDataUrl(url: string): Promise<{ dataUrl: string; width: number; height: number }> {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image()
+        image.crossOrigin = 'anonymous'
+        image.onload = () => resolve(image)
+        image.onerror = () => reject(new Error('Failed to load logo image'))
+        image.src = url
+    })
+
+    const canvas = document.createElement('canvas')
+    canvas.width = img.naturalWidth
+    canvas.height = img.naturalHeight
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('Canvas not supported')
+    ctx.drawImage(img, 0, 0)
+
+    return {
+        dataUrl: canvas.toDataURL('image/png'),
+        width: img.naturalWidth,
+        height: img.naturalHeight
+    }
+}
+
+export async function generateReceiptPDF(receipt: ReceiptData) {
     const doc = new jsPDF({
         unit: 'mm',
         format: [80, 200] // 80mm width (thermal receipt size)
     })
 
     let y = 10
+
+    if (receipt.store.logoUrl) {
+        try {
+            const { dataUrl, width, height } = await loadImageAsPngDataUrl(receipt.store.logoUrl)
+            const maxDim = 20 // mm
+            const ratio = Math.min(maxDim / width, maxDim / height, 1)
+            const w = width * ratio
+            const h = height * ratio
+            doc.addImage(dataUrl, 'PNG', 40 - w / 2, y, w, h)
+            y += h + 4
+        } catch (error) {
+            console.error('Failed to render logo on receipt:', error)
+        }
+    }
 
     // Store name (centered, bold)
     doc.setFontSize(14)
