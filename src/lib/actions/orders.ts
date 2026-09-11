@@ -4,6 +4,41 @@ import { prisma } from "@/lib/db/prisma"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth/auth-config"
 import { revalidatePath } from "next/cache"
+import { sendWhatsAppMessage } from "@/lib/utils/whatsapp"
+import { formatCurrency } from "@/lib/utils/formatters"
+
+// Fire-and-forget: notify the owner on WhatsApp without delaying the checkout response.
+// sendWhatsAppMessage never throws, so a failure here can't affect the sale.
+async function notifyOwnerOfSale(orderId: string) {
+    try {
+        const order = await prisma.order.findUnique({
+            where: { id: orderId },
+            include: {
+                items: { include: { variant: { include: { product: true } } } },
+                cashier: true
+            }
+        })
+        if (!order) return
+
+        const itemLines = order.items
+            .map(item => `${item.quantity}x ${item.variant.product.brand} ${item.variant.product.name} ${item.variant.size}`)
+            .join('\n')
+
+        const message = [
+            `🧾 New Sale - ${order.orderNumber}`,
+            `Cashier: ${order.cashier.name}`,
+            '',
+            itemLines,
+            '',
+            `Total: ${formatCurrency(order.total)}`,
+            `Payment: ${order.paymentMethod}`
+        ].join('\n')
+
+        await sendWhatsAppMessage(message)
+    } catch (error) {
+        console.error('Failed to send sale WhatsApp notification:', error)
+    }
+}
 
 interface CreateOrderData {
     items: Array<{
@@ -144,6 +179,7 @@ export async function createOrder(data: CreateOrderData) {
         })
 
         revalidatePath('/terminal')
+        notifyOwnerOfSale(order.id)
         return { success: true, order }
     } catch (error) {
         console.error('Order creation failed:', error)
